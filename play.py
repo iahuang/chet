@@ -2,7 +2,7 @@ from chet.model import Chet, ModelConfig
 from chet.tokenizer import tokenize_board
 from util.chessprint import print_board
 import random
-from typing import Literal, Callable
+from typing import Callable
 import chess
 import torch
 
@@ -10,7 +10,7 @@ import torch
 def play_game(
     model: Chet,
     tokenizer: Callable[[chess.Board], torch.Tensor],
-    temperature: float = 1.0,
+    temperature: float,
 ):
     """
     Play a game against the chess bot using the terminal interface.
