@@ -16,7 +16,9 @@ Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.op
 
 Given a board state given as the set of pieces on each square as well as the side to move, the model outputs a probability distribution over all `4096 = 64 * 64` possible moves.
 
-<img src="./assets/architecture.png" alt="Architecture" width="500"/>
+<p align="center">
+    <img src="./assets/architecture.png" alt="Architecture" width="500"/>
+</p>
 
 ## Dataset
 
