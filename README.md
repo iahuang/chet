@@ -10,7 +10,6 @@ The goal of this project is to create a chess model that is:
 
 While the current state-of-the-art chess engines such as [Stockfish](https://stockfishchess.org/) far exceed the ability of top human players and can be considered, for most practical purposes, optimal, the moves produced by these engines lack interpretability and are far removed from the style of play that even top human players would make. This project aims to create a chess foundation model that can be used in applications such as training, analysis, and the creation of chess agents that can be fine-tuned to emulate specific levels or even the styles of individual players.
 
-
 ## Architecture
 
 Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) that outputs move predictions directly without any explicit game tree search. Chet is small, with a current largest model size of only 33M parameters.
@@ -67,6 +66,20 @@ board_tokens = tokenize_board(board)
 move_logits = model(board_tokens)
 move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ```
+
+## Strengths and Limitations
+
+### Strengths
+
+-   From empirical testing, the model is able to play the opening (up to about 6 full moves) with reasonably strong accuracy.
+-   The model appears to be able to recognize basic tactical patterns, such as pins, skewers, and forks.
+
+### Limitations
+
+-   Special board state information such as en passant and castling rights are not encoded in the current tokenization scheme. Castling rights can generally be inferred from the board state based on the position of the king and rooks, but en passant cannot.
+-   Rules such as the fifty-move rule and the threefold repetition rule are not encoded.
+-   The model often struggles to convert endgame positions into checkmates, often accidentally creating a stalemate. From empirical testing, the model does not efficiently utilize its material advantage to create checkmates, instead preferring to create as many queens as possible.
+-   From empirical testing, the model struggles to recognize moves which create discovered attacks.
 
 ## Related Works
 
