@@ -1,3 +1,5 @@
 .DS_Store
 *.pyc
 *.pt
+.data/
+*.dev.py

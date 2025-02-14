@@ -1,12 +1,17 @@
-from ..chet.model import Chet, ModelConfig
-from ..chet.tokenizer import tokenize_board
-from .lib.chessprint import print_board
+from chet.model import Chet, ModelConfig
+from chet.tokenizer import tokenize_board
+from util.chessprint import print_board
 import random
 from typing import Literal, Callable
 import chess
+import torch
 
 
-def play_game(model: Chet, *, move_sampler: Callable[[Chet, chess.Board], chess.Move]):
+def play_game(
+    model: Chet,
+    tokenizer: Callable[[chess.Board], torch.Tensor],
+    temperature: float = 1.0,
+):
     """
     Play a game against the chess bot using the terminal interface.
     """
@@ -66,18 +71,22 @@ def play_game(model: Chet, *, move_sampler: Callable[[Chet, chess.Board], chess.
             print("\nBot is thinking...")
 
             # Get board tensor
-            board_tensor = tokenize_board(board).unsqueeze(0)
+            board_tensor = tokenizer(board).unsqueeze(0)
 
             # Get top moves from model
-            top_moves = model.get_top_moves(board_tensor, board, n=5)
+            top_moves = model.get_top_moves(
+                board_tensor, board, n=5, temperature=temperature
+            )
 
             # Print top moves being considered
-            print("\nTop moves being considered:")
+            print(f"\nTop moves being considered (with temperature={temperature}):")
             for move, prob in top_moves:
                 print(f"{move}: {prob:.1%}")
 
-            # Make the highest probability move
-            best_move = top_moves[0][0]
+            # Sample a move from the top moves
+            best_move = random.choices(
+                top_moves, weights=[prob for _, prob in top_moves], k=1
+            )[0][0]
             print(f"\nBot plays: {best_move}")
 
             last_move = best_move
@@ -102,25 +111,6 @@ def play_game(model: Chet, *, move_sampler: Callable[[Chet, chess.Board], chess.
         print("\nGame Over!")
 
 
-def sample_move(
-    model: Chet,
-    board: chess.Board,
-    *,
-    mode: Literal["greedy", "prob"] = "greedy",
-    temperature: float = 1.0,
-):
-    board_tensor = tokenize_board(board).unsqueeze(0)
-    top_moves = model.get_top_moves(board_tensor, board, n=5, temperature=temperature)
-    if mode == "greedy":
-        return top_moves[0][0]
-    elif mode == "prob":
-        return random.choices(top_moves, weights=[prob for _, prob in top_moves], k=1)[
-            0
-        ][0]
-    else:
-        raise ValueError(f"Invalid mode: {mode}")
-
-
 if __name__ == "__main__":
     config = ModelConfig(
         embed_dim=468,
@@ -129,15 +119,14 @@ if __name__ == "__main__":
         dropout=0.1,
     )
     path = "path/to/model.pt"
-    model = Chet.from_pretrained(path, config)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Chet.from_pretrained(path, config, device=device)
 
     try:
         play_game(
             model,
-            # change as desired
-            move_sampler=lambda model, board: sample_move(
-                model, board, mode="prob", temperature=0.5
-            ),
+            tokenizer=lambda board: tokenize_board(board).to(device),
+            temperature=0.5,
         )
     except KeyboardInterrupt:
         print("\nGame terminated by user.")

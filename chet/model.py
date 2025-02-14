@@ -408,7 +408,16 @@ class Chet(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     @classmethod
-    def from_pretrained(cls, path: str, config: ModelConfig):
+    def from_pretrained(cls, path: str, config: ModelConfig, *, device: str = "cpu"):
+        """
+        Load a pretrained model from a file.
+
+        Args:
+            path (str): The path to the model file
+            config (ModelConfig): The configuration used to train the model
+            device (str): The device to load the model onto
+        """
+
         model = cls(config)
-        model.load_state_dict(torch.load(path))
-        return model
+        model.load_state_dict(torch.load(path, map_location=device))
+        return model.to(device)

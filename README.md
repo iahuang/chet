@@ -23,6 +23,7 @@ Weights for pretrained models are publically available but are not included in t
 - Model size: 32,535,893 parameters
 - Model file: [Google Drive](https://drive.google.com/file/d/1ypObrVRd_lXlVFABXb-o4u8koElxbiYE/view?usp=sharing)
 - Training set: 5M positions
+- Performance: 79.5% accuracy on 10k positions taken from the Lichess puzzles dataset.
 
 Configuration:
 ```python
