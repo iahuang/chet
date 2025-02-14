@@ -4,11 +4,12 @@ Chet is a lightweight neural network chess engine trained on human play.
 
 The goal of this project is to create a chess model that is:
 
--   Small enough to be trained on a single GPU in a reasonable amount of time.
+-   Small enough to be trained on a single GPU (this is more a constraint arising from limited access to computational resources than an explicit design goal).
 -   Accurate enough to be useful.
 -   Produces human-like moves, even where not optimal.
 
-While the current state-of-the-art chess engines such as [Stockfish](https://stockfishchess.org/) far exceed the ability of top human players and can be considered, for most practical purposes, optimal, the moves produced by these engines lack interpretability and are far removed from the style of play that even top human players would make. This project aims to create a chess foundation model that can be used in applications such as training, analysis, and the creation of chess agents that can be fine-tuned to emulate specific levels or even the playing styles of individual players.
+While the current state-of-the-art chess engines such as [Stockfish](https://stockfishchess.org/) far exceed the ability of top human players and can be considered, for most practical purposes, optimal, the moves produced by these engines lack interpretability and are far removed from the style of play that even top human players would make. This project aims to create a chess foundation model that can be used in applications such as training, analysis, and the creation of chess agents that can be fine-tuned to emulate specific levels or even the styles of individual players.
+
 
 ## Architecture
 
