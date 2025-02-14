@@ -20,12 +20,13 @@ Weights for pretrained models are publically available but are not included in t
 
 ### Chet-33M
 
-- Model size: 32,535,893 parameters
-- Model file: [Google Drive](https://drive.google.com/file/d/1ypObrVRd_lXlVFABXb-o4u8koElxbiYE/view?usp=sharing)
-- Training set: 5M positions
-- Performance: 79.5% accuracy on 10k positions taken from the Lichess puzzles dataset.
+-   Model size: 32,535,893 parameters
+-   Model file: [Google Drive](https://drive.google.com/file/d/1ypObrVRd_lXlVFABXb-o4u8koElxbiYE/view?usp=sharing)
+-   Training set: 5M positions
+-   Performance: 79.5% accuracy on 10k positions taken from the Lichess puzzles dataset.
 
 Configuration:
+
 ```python
 config = ModelConfig(
     embed_dim=468,
@@ -45,13 +46,13 @@ from chet.tokenizer import tokenize_board
 import chess
 import torch.nn.functional as F
 
-model = Chet.from_pretrained("path/to/model.pt", ModelConfig())
+model = Chet.from_pretrained("path/to/model.pt", ModelConfig(), device="cuda")
 
+# tokenization
 board = chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
 board_tokens = tokenize_board(board)
 
-# print predicted move probabilities
+# forward pass
 move_logits = model(board_tokens)
 move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ```
-
