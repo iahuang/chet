@@ -70,7 +70,7 @@ move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ## Limitations
 
 -   Special board state information such as en passant and castling rights are not encoded in the current tokenization scheme. Castling rights can generally be inferred from the board state based on the position of the king and rooks, but en passant cannot.
--   Rules such as the fifty-move rule and the threefold repetition rule are not encoded.
+-   Stalemate conditions such as the fifty-move rule and threefold repetition are not encoded. The model is not given any information about past board states.
 -   The model often struggles to convert endgame positions into checkmates, often accidentally creating a stalemate. From empirical testing, the model does not efficiently utilize its material advantage to create checkmates, instead preferring to create as many queens as possible.
 -   From empirical testing, the model struggles to recognize moves which create discovered attacks.
 
