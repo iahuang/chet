@@ -1,10 +1,18 @@
 # chet
 
-Chet is a lightweight neural network chess engine trained on high-level human play.
+Chet is a lightweight neural network chess engine trained on human play.
+
+The goal of this project is to create a chess model that is:
+
+-   Small enough to be trained on a single GPU in a reasonable amount of time.
+-   Accurate enough to be useful.
+-   Produces human-like moves, even where not optimal.
+
+While the current state-of-the-art chess engines such as [Stockfish](https://stockfishchess.org/) far exceed the ability of top human players and can be considered, for most practical purposes, optimal, the moves produced by these engines lack interpretability and are far removed from the style of play that even top human players would make. This project aims to create a well-performing chess model that can be used in applications such as chess playing agents and chess puzzles.
 
 ## Architecture
 
-Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) that outputs move predictions directly without any explicit game tree search. Chet is smell, with a current largest model size of only 33M parameters.
+Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) that outputs move predictions directly without any explicit game tree search. Chet is small, with a current largest model size of only 33M parameters.
 
 Given a board state given as the set of pieces on each square as well as the side to move, the model outputs a probability distribution over all `4096 = 64 * 64` possible moves.
 
@@ -56,3 +64,9 @@ board_tokens = tokenize_board(board)
 move_logits = model(board_tokens)
 move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ```
+
+## Related Works
+
+-   [Chess Transformers](https://github.com/sgrvinod/chess-transformers), a similar transformer-based chess engine.
+-   [Leela Chess Zero](https://github.com/LeelaChessZero/lc0), another, far larger neural network chess engine based on the transformer architecture.
+-   [Maia Chess](https://www.maiachess.com/), a version of AlphaZero that has been fine-tuned with the goal of producing more human-like play.
