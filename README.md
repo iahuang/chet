@@ -67,14 +67,7 @@ move_logits = model(board_tokens)
 move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ```
 
-## Strengths and Limitations
-
-### Strengths
-
--   From empirical testing, the model is able to play the opening (up to about 6 full moves) with reasonably strong accuracy.
--   The model appears to be able to recognize basic tactical patterns, such as pins, skewers, and forks.
-
-### Limitations
+## Limitations
 
 -   Special board state information such as en passant and castling rights are not encoded in the current tokenization scheme. Castling rights can generally be inferred from the board state based on the position of the king and rooks, but en passant cannot.
 -   Rules such as the fifty-move rule and the threefold repetition rule are not encoded.
