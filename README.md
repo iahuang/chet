@@ -34,3 +34,24 @@ config = ModelConfig(
     dropout=0.1,
 )
 ```
+
+## Example Pytorch Usage
+
+`chet.model.Chet` is a subclass of `torch.nn.Module`. Example usage is as follows:
+
+```python
+from chet.model import Chet, ModelConfig
+from chet.tokenizer import tokenize_board
+import chess
+import torch.nn.functional as F
+
+model = Chet.from_pretrained("path/to/model.pt", ModelConfig())
+
+board = chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+board_tokens = tokenize_board(board)
+
+# print predicted move probabilities
+move_logits = model(board_tokens)
+move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
+```
+
