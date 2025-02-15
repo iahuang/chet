@@ -12,9 +12,7 @@ While the current state-of-the-art chess engines such as [Stockfish](https://sto
 
 ## Architecture
 
-Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) that outputs move predictions directly without any explicit game tree search. Chet is small, with a current largest model size of only 33M parameters.
-
-Given a board state given as the set of pieces on each square as well as the side to move, the model outputs a probability distribution over all `4096 = 64 * 64` possible moves.
+Chet is a decoder-only transformer model based loosely on [GPT-2](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf) that outputs move predictions as a probability distribution over all `4096 = 64 * 64` possible moves given the current board state. Chet is small; about a thousand times smaller than some models used in the state-of-the-art.
 
 <p align="center">
     <img src="./assets/architecture.png" alt="Architecture" width="500"/>
@@ -67,6 +65,12 @@ board_tokens = tokenize_board(board)
 move_logits = model(board_tokens)
 move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
 ```
+
+## Tree Search
+
+Chet provides an optional tree search function (`chet.tree_search.chet_tree_search`) that augments the move selection process with explicit minimax game tree search using a simple material evaluation function. This function overrides the default move sampling function to play moves that would lead to a substantial material gain (or win) and also ensures that moves which would lead to a large material loss (or loss) are never played. The internal tree search is optimized by only considering moves to which the model assigns a significant probability. This reduces the branching factor of the tree search dramatically.
+
+As it stands, the model will occasionally play blundering moves or miss opportunities, and this function is designed to mitigate these issues.
 
 ## Limitations
 
