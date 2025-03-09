@@ -37,10 +37,10 @@ def load_dataset(
 
         for row in tqdm(reader, desc="Loading dataset", total=limit):
             board_fen, move_uci = row
-            board = chess.Board(board_fen)
+            board = board_fen
             boards.append(board)
 
-            move = chess.Move.from_uci(move_uci)
+            move = move_uci
             moves.append(move)
 
             if limit and len(moves) == limit:
@@ -50,14 +50,14 @@ def load_dataset(
 
 
 class ChessDataset(Dataset):
-    boards: list[chess.Board]
-    moves: list[chess.Move]
+    boards: list[str]
+    moves: list[str]
     tokenizer: Callable[[chess.Board], torch.Tensor]
 
     def __init__(
         self,
-        boards: list[chess.Board],
-        moves: list[chess.Move],
+        boards: list[str],
+        moves: list[str],
         tokenizer: Callable[[chess.Board], torch.Tensor],
     ) -> None:
         super().__init__()
@@ -68,7 +68,7 @@ class ChessDataset(Dataset):
     def __len__(self) -> int:
         return len(self.moves)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Get a training example from the dataset.
 
@@ -79,10 +79,11 @@ class ChessDataset(Dataset):
             tuple[torch.Tensor, torch.Tensor]: Tuple containing:
                 - Board tokens tensor of shape [65]
                 - Target move probabilities tensor of shape [4096]
+                - Legal move mask tensor of shape [4096]. 1.0 if the move is legal, 0.0 otherwise.
         """
 
-        board = self.boards[idx]
-        move = self.moves[idx]
+        board = chess.Board(self.boards[idx])
+        move = chess.Move.from_uci(self.moves[idx])
 
         # Convert board to tokens
         board_tokens = self.tokenizer(board)
@@ -92,7 +93,11 @@ class ChessDataset(Dataset):
 
         target[move.from_square * 64 + move.to_square] = 1.0
 
-        return board_tokens, target
+        legal_move_mask = torch.zeros(4096)
+        for move in board.legal_moves:
+            legal_move_mask[move.from_square * 64 + move.to_square] = 1.0
+
+        return board_tokens, target, legal_move_mask
 
 
 def merge_datasets(datasets: list[ChessDataset]) -> ChessDataset:
