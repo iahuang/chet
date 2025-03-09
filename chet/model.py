@@ -115,7 +115,7 @@ class BoardEmbedder(nn.Module):
     def __init__(self, *, embed_dim: int) -> None:
         super().__init__()
 
-        VOCAB_SIZE = 16
+        VOCAB_SIZE = 15
 
         self.piece_embedder = PieceEmbedder(VOCAB_SIZE, embed_dim)
         self.pos_embedder = PositionalEmbedding(embed_dim)
@@ -247,49 +247,28 @@ class MovePredictor(nn.Module):
     def __init__(self, embed_dim: int, hidden_dim: int | None = None) -> None:
         super().__init__()
         if hidden_dim is None:
-            hidden_dim = embed_dim
+            hidden_dim = 128
 
-        # predicts P(from_square = i)
-        self.from_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 1),
-        )
-
-        # predicts P(to_square = j | from_square = i)
-        self.to_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, hidden_dim),
+        self.ffn = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, 64),
         )
 
-    def forward(
-        self, x: torch.Tensor, cls: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Predicts move scores for pieces.
 
         Args:
             x (torch.Tensor): Piece embeddings of shape [batch_size, 64, embed_dim]
-            cls (torch.Tensor): Class token of shape [batch_size, embed_dim]
 
         Returns:
-            tuple[torch.Tensor, torch.Tensor]: Tuple containing:
-                - From square scores of shape [batch_size, 64]
-                - To square scores of shape [batch_size, 64, 64]
+            torch.Tensor: Move scores of shape [batch_size, 64, 64]
         """
-        # Expand cls token to match x's sequence length
-        batch_size = x.size(0)
-        expanded_cls = cls.unsqueeze(1).expand(-1, 64, -1)
 
-        # Concatenate expanded cls token with x
-        x = torch.cat([x, expanded_cls], dim=-1)
+        scores = self.ffn(x)  # [batch_size, 64, 64]
 
-        # Get from and to scores
-        from_scores = self.from_head(x).squeeze(-1)  # [batch_size, 64]
-        to_scores = self.to_head(x)  # [batch_size, 64, 64]
-
-        return from_scores, to_scores
+        return scores
 
 
 class Chet(nn.Module):
@@ -339,7 +318,7 @@ class Chet(nn.Module):
         batch_size = board_tokens.size(0)
 
         # 1) Embed the board and apply dropout
-        x = self.board_embedder(board_tokens)  # [batch_size, 66, embed_dim]
+        x = self.board_embedder(board_tokens)  # [batch_size, 65, embed_dim]
         x = self.embed_dropout(x)
 
         # 2) Pass through transformer layers
@@ -349,15 +328,13 @@ class Chet(nn.Module):
         # 3) Final normalization
         x = self.norm(x)
 
-        # 4) Separate the CLS token and the 64 squares
-        cls_embedding = x[:, 65, :]  # [batch_size, embed_dim]
+        # 4) Separate the 64 squares
         piece_embeddings = x[:, 0:64, :]  # [batch_size, 64, embed_dim]
 
         # p(from_square = i), p(to_square = j | from_square = i)
-        from_logits, to_logits = self.move_predictor(piece_embeddings, cls_embedding)
+        logits = self.move_predictor(piece_embeddings)
 
-        full_logits = from_logits.unsqueeze(-1) + to_logits
-        full_logits = full_logits.view(batch_size, 64 * 64)
+        full_logits = logits.view(batch_size, 64 * 64)
 
         return full_logits
 

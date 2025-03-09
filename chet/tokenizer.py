@@ -23,22 +23,19 @@ def tokenize_board(board: chess.Board) -> torch.Tensor:
     12: black king
     13: [move token: white to move]
     14: [move token: black to move]
-    15: [CLS]
 
     Tokenization layout:
     ```
-    0          1              63          64                     65
-    [square 0] [square 1] ... [square 63] [move token: 13 or 14] [CLS]
+    0          1              63          64                    
+    [square 0] [square 1] ... [square 63] [move token: 13 or 14]
     ```
     """
 
-    tokenization = torch.zeros(66, dtype=torch.int)
+    tokenization = torch.zeros(65, dtype=torch.int)
     tokenization[64] = _move_tokenization(board.turn)
 
     for i in range(64):
         tokenization[i] = _piece_tokenization(board.piece_at(i))
-
-    tokenization[65] = 15
 
     return tokenization
 
