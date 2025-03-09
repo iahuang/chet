@@ -5,3 +5,5 @@
 # used for internal testing and development
 .data/
 *.dev.py
+data_processing/*.pgn
+data_processing/*.csv
