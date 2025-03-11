@@ -7,3 +7,4 @@
 *.dev.py
 data_processing/*.pgn
 data_processing/*.csv
+data.csv.zip
