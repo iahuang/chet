@@ -10,3 +10,14 @@ class Chet34(Chet):
     @classmethod
     def from_pretrained(cls, path: str, *, device: str = "cpu"):
         return _from_pretrained(cls, path, device=device)
+
+
+class Chet40(Chet):
+    def __init__(self):
+        super().__init__(
+            ModelConfig(embed_dim=504, n_heads=12, n_layers=12, dropout=0.0)
+        )
+
+    @classmethod
+    def from_pretrained(cls, path: str, *, device: str = "cpu"):
+        return _from_pretrained(cls, path, device=device)
