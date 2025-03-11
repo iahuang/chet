@@ -12,10 +12,10 @@ class Chet34(Chet):
         return _from_pretrained(cls, path, device=device)
 
 
-class Chet40(Chet):
+class Chet42(Chet):
     def __init__(self):
         super().__init__(
-            ModelConfig(embed_dim=504, n_heads=12, n_layers=12, dropout=0.0)
+            ModelConfig(embed_dim=540, n_heads=12, n_layers=12, dropout=0.0)
         )
 
     @classmethod
