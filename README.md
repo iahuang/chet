@@ -38,7 +38,7 @@ Configuration:
 
 ```python
 config = ModelConfig(
-    embed_dim=468,
+    embed_dim=480,
     n_heads=12,
     n_layers=12,
     dropout=0.1,
