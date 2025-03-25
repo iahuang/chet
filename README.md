@@ -26,13 +26,13 @@ Chet is trained on positions taken from the [Lichess Elite Database](https://dat
 
 Weights for pretrained models are publically available but are not included in the repository due to their large size. Models may be loaded from a model file via `Chet.from_pretrained(path, config)`. The values of `ModelConfig` must match the training configuration used to generate the model file.
 
-### Chet-33M
+### Chet34
 
--   Model size: 32,535,893 parameters
--   Model file: [Google Drive](https://drive.google.com/file/d/1ypObrVRd_lXlVFABXb-o4u8koElxbiYE/view?usp=sharing)
--   Training set: 5M positions
--   Performance: 79.5% accuracy on 10k positions taken from the Lichess puzzles dataset.
--   Last updated: 2025-02-14 (this is what I'm busy doing on Valentine's Day btw)
+-   Model size: 34M parameters
+-   Model file: [Google Drive](https://drive.google.com/file/d/1dVlZ9fX80M2-K5Yzn17YsNV2qlpZinfk/view?usp=sharing)
+-   Training set: 70M positions
+-   Accuracy: 90% on 10k positions taken from the Lichess puzzles dataset. 60% Validation accuracy
+-   Performance: About 2300 Elo Blitz on chess.com
 
 Configuration:
 
