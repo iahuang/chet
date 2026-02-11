@@ -55,7 +55,7 @@ enum Command {
         puzzle_file: Option<PathBuf>,
 
         /// Maximum number of puzzles to include
-        #[arg(long, default_value = "100000")]
+        #[arg(long, default_value = "5000000")]
         max_puzzles: usize,
 
         /// Skip pre-shuffling the data

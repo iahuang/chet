@@ -6,7 +6,7 @@ import time
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from chet.model_v2 import Chet, ModelConfig
+from chet.model_v3 import Chet, ModelConfig
 
 
 def train(
@@ -15,16 +15,27 @@ def train(
     val_dataset: ChessDataset | None = None,
     *,
     batch_size: int = 512,
-    epochs: int = 5,
     learning_rate: float = 1e-4,
-    weight_decay: float = 1e-3,
-    warmup_steps: int | None = 100000,
+    min_lr: float = 1e-5,
+    weight_decay: float = 1e-4,
+    warmup_steps: int = 10000,
+    decay_steps: int = 100000,
     device: str = "cuda",
     num_workers: int = 4,
     log_file: str = "training_log.csv",
     val_interval_minutes: float = 60,
     compile_model: bool = True,
 ) -> None:
+    """Train the model indefinitely, cycling over the dataset until interrupted.
+
+    The LR schedule is defined entirely in steps:
+      - Linear warmup from 0 to ``learning_rate`` over ``warmup_steps``.
+      - Cosine decay from ``learning_rate`` to ``min_lr`` over ``decay_steps``.
+      - Constant ``min_lr`` thereafter.
+
+    Training runs until killed (e.g. Ctrl-C).  Best-validation checkpoints are
+    saved automatically.
+    """
     torch.backends.cudnn.benchmark = True
 
     model = model.to(device)
@@ -56,26 +67,43 @@ def train(
             persistent_workers=use_persistent,
         )
 
-    # Setup optimizer
+    # Setup optimizer — exclude LayerNorm, biases, and embeddings from weight decay
+    decay_params = []
+    no_decay_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        # Don't decay biases, LayerNorm weights/biases, or embedding weights
+        if param.ndim <= 1 or "norm" in name or "embed" in name:
+            no_decay_params.append(param)
+        else:
+            decay_params.append(param)
+
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ],
+        lr=learning_rate,
     )
     criterion = torch.nn.CrossEntropyLoss()
 
     # Mixed precision: bf16 on A100 (no GradScaler needed for bf16)
     autocast_ctx = torch.amp.autocast(device, dtype=torch.bfloat16)
 
-    # Setup learning rate scheduler: linear warmup + cosine decay
-    total_steps = len(train_loader) * epochs
-    if warmup_steps is None:
-        warmup_steps = 0
+    # Setup learning rate scheduler: linear warmup + cosine decay (step-based)
+    # After warmup_steps + decay_steps the LR holds at min_lr.
+    min_lr_ratio = min_lr / learning_rate if learning_rate > 0 else 0.0
 
     def lr_lambda(step: int) -> float:
         if step < warmup_steps:
             return step / warmup_steps if warmup_steps > 0 else 1.0
-        # Cosine decay from 1.0 to 0 over remaining steps
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        decay_progress = step - warmup_steps
+        if decay_progress >= decay_steps:
+            return min_lr_ratio
+        # Cosine decay from 1.0 to min_lr_ratio over decay_steps
+        progress = decay_progress / decay_steps
+        return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -121,8 +149,9 @@ def train(
 
         model.train()
 
-    # Training loop
+    # Training loop — runs indefinitely, cycling the dataloader
     global_step = 0
+    epoch = 0
     val_interval_secs = val_interval_minutes * 60
     train_log_interval_secs = 10
     last_val_time = time.monotonic()
@@ -137,11 +166,12 @@ def train(
     start_time = time.monotonic()
 
     try:
-        for epoch in range(epochs):
+        while True:
+            epoch += 1
             model.train()
             running_loss = 0.0
 
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch}", leave=True)
 
             i = 0
             for boards, targets in pbar:
@@ -165,7 +195,7 @@ def train(
                 i += 1
                 global_step += 1
                 current_lr = optimizer.param_groups[0]["lr"]
-                pbar.set_postfix({"train_loss": f"{running_loss / i:.4f}", "lr": f"{current_lr:.2e}"})
+                pbar.set_postfix({"train_loss": f"{running_loss / i:.4f}", "lr": f"{current_lr:.2e}", "step": global_step})
 
                 # Accumulate training loss and log at intervals
                 train_log_loss_accum += loss.item()
@@ -185,10 +215,6 @@ def train(
                 if now - last_val_time >= val_interval_secs:
                     run_validation(global_step)
                     last_val_time = now
-
-            # Also validate at epoch boundary
-            run_validation(global_step)
-            last_val_time = time.monotonic()
     finally:
         log_f.close()
 

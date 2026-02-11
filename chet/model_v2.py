@@ -146,7 +146,7 @@ class AttnFFN(nn.Module):
         activation (nn.LeakyReLU): Activation function
     """
 
-    def __init__(self, embed_dim: int) -> None:
+    def __init__(self, embed_dim: int, dropout: float = 0.1) -> None:
         super().__init__()
 
         hidden_size = int(embed_dim * 4)
@@ -154,7 +154,7 @@ class AttnFFN(nn.Module):
         self.fc1 = nn.Linear(embed_dim, hidden_size)
         self.fc2 = nn.Linear(hidden_size, embed_dim)
         self.activation = nn.GELU()
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -197,7 +197,7 @@ class TransformerLayer(nn.Module):
         self.attn = nn.MultiheadAttention(
             embed_dim, n_heads, batch_first=True, dropout=dropout
         )
-        self.ffn = AttnFFN(embed_dim)
+        self.ffn = AttnFFN(embed_dim, dropout=dropout)
 
         # Separate LayerNorms for attention and FFN (pre-norm)
         self.norm1 = nn.LayerNorm(embed_dim)
