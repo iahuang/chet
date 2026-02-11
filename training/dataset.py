@@ -1,134 +1,71 @@
 from __future__ import annotations
-import csv
-from typing import Callable
-import chess
+
+import json
+import os
+
+import numpy as np
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
-import random
-
-
-def load_dataset(
-    csv_file: str,
-    tokenizer: Callable[[chess.Board], torch.Tensor],
-    *,
-    limit: int | None = None,
-    skip_header: bool = True,
-) -> ChessDataset:
-    """
-    Load a dataset from a CSV file.
-
-    Expected format:
-    ```
-    board_fen,move_uci
-    rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1,e2e4
-    ...
-    ```
-    """
-
-    boards = []
-    moves = []
-
-    with open(csv_file, "r") as f:
-        reader = csv.reader(f)
-
-        if skip_header:
-            next(reader)
-
-        for row in tqdm(reader, desc="Loading dataset", total=limit):
-            board_fen, move_uci = row
-            board = chess.Board(board_fen)
-            boards.append(board)
-
-            move = chess.Move.from_uci(move_uci)
-            moves.append(move)
-
-            if limit and len(moves) == limit:
-                break
-
-    return ChessDataset(boards, moves, tokenizer)
 
 
 class ChessDataset(Dataset):
-    boards: list[chess.Board]
-    moves: list[chess.Move]
-    tokenizer: Callable[[chess.Board], torch.Tensor]
+    """Memory-mapped chess dataset for efficient random access.
+
+    Backed by pre-tokenized numpy arrays on disk. The OS page cache handles
+    memory management — no manual budgeting required.
+    """
 
     def __init__(
         self,
-        boards: list[chess.Board],
-        moves: list[chess.Move],
-        tokenizer: Callable[[chess.Board], torch.Tensor],
+        tokens: np.ndarray,
+        targets: np.ndarray,
+        start_idx: int,
+        end_idx: int,
     ) -> None:
         super().__init__()
-        self.boards = boards
-        self.moves = moves
-        self.tokenizer = tokenizer
+        self.tokens = tokens
+        self.targets = targets
+        self.start = start_idx
+        self.end = end_idx
 
     def __len__(self) -> int:
-        return len(self.moves)
+        return self.end - self.start
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get a training example from the dataset.
+        i = self.start + idx
+        tokens = torch.from_numpy(self.tokens[i].copy()).long()
+        target = torch.tensor(self.targets[i], dtype=torch.long)
 
-        Args:
-            idx (int): Index of the example to get
-
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Tuple containing:
-                - Board tokens tensor of shape [65]
-                - Target move probabilities tensor of shape [4096]
-        """
-
-        board = self.boards[idx]
-        move = self.moves[idx]
-
-        # Convert board to tokens
-        board_tokens = self.tokenizer(board)
-
-        # Create target probability distribution
-        target = torch.zeros(4096)
-
-        target[move.from_square * 64 + move.to_square] = 1.0
-
-        return board_tokens, target
+        return tokens, target
 
 
-def merge_datasets(datasets: list[ChessDataset]) -> ChessDataset:
-    boards = []
-    moves = []
-
-    for dataset in datasets:
-        boards.extend(dataset.boards)
-        moves.extend(dataset.moves)
-
-    return ChessDataset(boards, moves, datasets[0].tokenizer)
-
-
-def shuffle_dataset(dataset: ChessDataset) -> ChessDataset:
-    boards, moves = dataset.boards, dataset.moves
-    indices = list(range(len(boards)))
-    random.shuffle(indices)
-
-    return ChessDataset(
-        [boards[i] for i in indices],
-        [moves[i] for i in indices],
-        dataset.tokenizer,
-    )
-
-
-def split_dataset(
-    dataset: ChessDataset, val_split: float
+def load_dataset(
+    data_dir: str,
+    val_split: float = 0.05,
 ) -> tuple[ChessDataset, ChessDataset]:
-    n_val = int(len(dataset) * val_split)
-    train_boards = dataset.boards[:-n_val]
-    val_boards = dataset.boards[-n_val:]
+    """Load preprocessed binary dataset with memory-mapped arrays.
 
-    train_moves = dataset.moves[:-n_val]
-    val_moves = dataset.moves[-n_val:]
+    Args:
+        data_dir: Directory containing tokens.npy, targets.npy, and metadata.json
+        val_split: Fraction of data to use for validation
 
-    return (
-        ChessDataset(train_boards, train_moves, dataset.tokenizer),
-        ChessDataset(val_boards, val_moves, dataset.tokenizer),
-    )
+    Returns:
+        Tuple of (train_dataset, val_dataset)
+    """
+    with open(os.path.join(data_dir, "metadata.json")) as f:
+        metadata = json.load(f)
+    N = metadata["num_positions"]
+
+    tokens = np.load(os.path.join(data_dir, "tokens.npy"), mmap_mode="r")
+    targets = np.load(os.path.join(data_dir, "targets.npy"), mmap_mode="r")
+
+    assert tokens.shape == (N, 66), f"Expected tokens shape ({N}, 66), got {tokens.shape}"
+    assert targets.shape == (N,), f"Expected targets shape ({N},), got {targets.shape}"
+
+    n_val = int(N * val_split)
+    n_train = N - n_val
+
+    train_dataset = ChessDataset(tokens, targets, 0, n_train)
+    val_dataset = ChessDataset(tokens, targets, n_train, N)
+
+    return train_dataset, val_dataset

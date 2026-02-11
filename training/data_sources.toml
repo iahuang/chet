@@ -1,0 +1,22 @@
+# Data sources for the Chet training pipeline.
+#
+# PGN sources: zip archives containing .pgn files of high-level games.
+# Puzzle source: zstd-compressed CSV of Lichess puzzles.
+
+pgn_sources = [
+    "https://database.nikonoel.fr/lichess_elite_2021-12.zip",
+    "https://database.nikonoel.fr/lichess_elite_2022-01.zip",
+    "https://database.nikonoel.fr/lichess_elite_2022-02.zip",
+    "https://database.nikonoel.fr/lichess_elite_2022-03.zip",
+    "https://database.nikonoel.fr/lichess_elite_2022-04.zip",
+    "https://database.nikonoel.fr/lichess_elite_2022-05.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-06.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-07.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-08.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-09.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-10.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-11.zip",
+    # "https://database.nikonoel.fr/lichess_elite_2022-12.zip",
+]
+
+puzzle_source = "https://database.lichess.org/lichess_db_puzzle.csv.zst"
