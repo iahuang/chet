@@ -15,11 +15,11 @@ def train(
     val_dataset: ChessDataset | None = None,
     *,
     batch_size: int = 512,
-    learning_rate: float = 1e-4,
-    min_lr: float = 1e-5,
+    learning_rate: float = 5e-4,
+    min_lr: float = 5e-5,
     weight_decay: float = 1e-4,
-    warmup_steps: int = 10000,
-    decay_steps: int = 100000,
+    warmup_steps: int = 5000,
+    decay_steps: int = 250000,
     device: str = "cuda",
     num_workers: int = 4,
     log_file: str = "training_log.csv",
@@ -226,7 +226,6 @@ MODEL_CONFIG = ModelConfig(
     embed_dim=768,
     n_heads=12,
     n_layers=12,
-    dropout=0.1,
 )
 
 if __name__ == "__main__":

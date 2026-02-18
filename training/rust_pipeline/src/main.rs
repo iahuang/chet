@@ -58,6 +58,10 @@ enum Command {
         #[arg(long, default_value = "5000000")]
         max_puzzles: usize,
 
+        /// Minimum Elo for both players; games where either player is below this are skipped
+        #[arg(long, value_name = "ELO")]
+        min_elo: Option<u16>,
+
         /// Skip pre-shuffling the data
         #[arg(long)]
         no_shuffle: bool,
@@ -85,6 +89,10 @@ enum Command {
         #[arg(long, default_value = "100000")]
         max_puzzles: usize,
 
+        /// Minimum Elo for both players; games where either player is below this are skipped
+        #[arg(long, value_name = "ELO")]
+        min_elo: Option<u16>,
+
         /// Skip pre-shuffling the data
         #[arg(long)]
         no_shuffle: bool,
@@ -108,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_dir,
             puzzle_file,
             max_puzzles,
+            min_elo,
             no_shuffle,
             seed,
         } => {
@@ -116,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &output_dir,
                 puzzle_file.as_deref(),
                 max_puzzles,
+                min_elo,
                 !no_shuffle,
                 seed,
             )?;
@@ -125,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             data_dir,
             output_dir,
             max_puzzles,
+            min_elo,
             no_shuffle,
             seed,
         } => {
@@ -136,6 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &output_dir,
                 puzzle_file.as_deref(),
                 max_puzzles,
+                min_elo,
                 !no_shuffle,
                 seed,
             )?;
@@ -162,12 +174,16 @@ fn cmd_process(
     output_dir: &std::path::Path,
     puzzle_file: Option<&std::path::Path>,
     max_puzzles: usize,
+    min_elo: Option<u16>,
     shuffle: bool,
     seed: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("============================================================");
     eprintln!("PROCESSING DATA");
     eprintln!("============================================================");
+    if let Some(elo) = min_elo {
+        eprintln!("Minimum Elo filter: {}", elo);
+    }
 
     fs::create_dir_all(output_dir)?;
 
@@ -191,7 +207,7 @@ fn cmd_process(
         .par_iter()
         .filter_map(|pgn_path| {
             eprintln!("Processing: {}", pgn_path.display());
-            match pgn_processor::process_pgn_file(pgn_path) {
+            match pgn_processor::process_pgn_file(pgn_path, min_elo) {
                 Ok(bin_path) => Some(bin_path),
                 Err(e) => {
                     eprintln!("Error processing {}: {}", pgn_path.display(), e);

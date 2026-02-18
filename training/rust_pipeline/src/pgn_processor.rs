@@ -20,13 +20,21 @@ struct PgnVisitor {
     pos: Chess,
     move_num: u32,
     games: u64,
+    skipped_games: u64,
     kept: u64,
     total: u64,
     label: String,
+    /// If set, both players must have Elo >= this value for a game to be included.
+    min_elo: Option<u16>,
+    /// Tracks Elo values parsed from the current game's headers.
+    white_elo: Option<u16>,
+    black_elo: Option<u16>,
+    /// Whether the current game passes the Elo filter (computed at end of headers).
+    skip_game: bool,
 }
 
 impl PgnVisitor {
-    fn new(out_path: &Path, label: String) -> std::io::Result<Self> {
+    fn new(out_path: &Path, label: String, min_elo: Option<u16>) -> std::io::Result<Self> {
         let file = File::create(out_path)?;
         let writer = BufWriter::new(file);
         Ok(PgnVisitor {
@@ -34,9 +42,14 @@ impl PgnVisitor {
             pos: Chess::default(),
             move_num: 0,
             games: 0,
+            skipped_games: 0,
             kept: 0,
             total: 0,
             label,
+            min_elo,
+            white_elo: None,
+            black_elo: None,
+            skip_game: false,
         })
     }
 }
@@ -47,21 +60,52 @@ impl Visitor for PgnVisitor {
     fn begin_game(&mut self) {
         self.pos = Chess::default();
         self.move_num = 0;
+        self.white_elo = None;
+        self.black_elo = None;
+        self.skip_game = false;
         self.games += 1;
 
         if self.games % LOG_EVERY_N_GAMES == 0 {
             eprintln!(
-                "  [{}] {:>9} games, {:>9} / {:>9} positions kept",
+                "  [{}] {:>9} games ({:>9} skipped), {:>9} / {:>9} positions kept",
                 self.label,
                 format_num(self.games),
+                format_num(self.skipped_games),
                 format_num(self.kept),
                 format_num(self.total),
             );
         }
     }
 
-    fn tag(&mut self, _name: &[u8], _value: RawTag<'_>) {
-        // Metadata (elo, result) is not needed for tokenized output.
+    fn tag(&mut self, name: &[u8], value: RawTag<'_>) {
+        if self.min_elo.is_some() {
+            let val_str = String::from_utf8_lossy(value.as_bytes());
+            match name {
+                b"WhiteElo" => {
+                    self.white_elo = val_str.trim().parse::<u16>().ok();
+                }
+                b"BlackElo" => {
+                    self.black_elo = val_str.trim().parse::<u16>().ok();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn end_tags(&mut self) -> Skip {
+        if let Some(min) = self.min_elo {
+            let dominated = match (self.white_elo, self.black_elo) {
+                (Some(w), Some(b)) => w >= min && b >= min,
+                // If either Elo is missing, skip the game
+                _ => false,
+            };
+            if !dominated {
+                self.skip_game = true;
+                self.skipped_games += 1;
+                return Skip(true);
+            }
+        }
+        Skip(false)
     }
 
     fn san(&mut self, san_plus: SanPlus) {
@@ -101,15 +145,17 @@ impl Visitor for PgnVisitor {
 
 /// Process a single PGN file, writing tokenized positions to a temp `.bin` file.
 ///
+/// If `min_elo` is `Some(n)`, only games where both players have Elo >= n are included.
+///
 /// Returns the path to the temp binary file.
-pub fn process_pgn_file(pgn_path: &Path) -> std::io::Result<std::path::PathBuf> {
+pub fn process_pgn_file(pgn_path: &Path, min_elo: Option<u16>) -> std::io::Result<std::path::PathBuf> {
     let label = pgn_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
     let out_path = pgn_path.with_extension("bin");
-    let mut visitor = PgnVisitor::new(&out_path, label.clone())?;
+    let mut visitor = PgnVisitor::new(&out_path, label.clone(), min_elo)?;
 
     let file = File::open(pgn_path)?;
     let reader = BufReader::new(file);
@@ -119,9 +165,10 @@ pub fn process_pgn_file(pgn_path: &Path) -> std::io::Result<std::path::PathBuf> 
     visitor.writer.flush()?;
 
     eprintln!(
-        "  [{}] DONE — {} games, {} / {} positions kept",
+        "  [{}] DONE — {} games ({} skipped), {} / {} positions kept",
         label,
         format_num(visitor.games),
+        format_num(visitor.skipped_games),
         format_num(visitor.kept),
         format_num(visitor.total),
     );
