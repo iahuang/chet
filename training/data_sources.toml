@@ -21,6 +21,9 @@ pgn_sources = [
     "https://database.nikonoel.fr/lichess_elite_2023-02.zip",
     "https://database.nikonoel.fr/lichess_elite_2023-03.zip",
     "https://database.nikonoel.fr/lichess_elite_2023-04.zip",
+    "https://database.nikonoel.fr/lichess_elite_2023-05.zip",
+    "https://database.nikonoel.fr/lichess_elite_2023-06.zip",
+    "https://database.nikonoel.fr/lichess_elite_2023-07.zip",
 ]
 
 puzzle_source = "https://database.lichess.org/lichess_db_puzzle.csv.zst"

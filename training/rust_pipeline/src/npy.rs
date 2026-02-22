@@ -11,9 +11,9 @@
 
 use std::io::{self, Write};
 
-/// Write a .npy header for a uint8 array with shape (n, 66).
-pub fn write_u8_header<W: Write>(w: &mut W, n: usize) -> io::Result<()> {
-    write_header(w, "|u1", &format!("({}, 66)", n))
+/// Write a .npy header for a uint8 array with shape (n, `token_width`).
+pub fn write_u8_header<W: Write>(w: &mut W, n: usize, token_width: usize) -> io::Result<()> {
+    write_header(w, "|u1", &format!("({}, {})", n, token_width))
 }
 
 /// Write a .npy header for a uint16 (little-endian) array with shape (n,).

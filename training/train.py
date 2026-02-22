@@ -6,7 +6,7 @@ import time
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from chet.model_v3 import Chet, ModelConfig
+from chet.model_v3b import Chet, ModelConfig
 
 
 def train(
@@ -14,10 +14,10 @@ def train(
     train_dataset: ChessDataset,
     val_dataset: ChessDataset | None = None,
     *,
-    batch_size: int = 512,
+    batch_size: int = 1024,
     learning_rate: float = 5e-4,
     min_lr: float = 5e-5,
-    weight_decay: float = 1e-4,
+    weight_decay: float = 1e-5,
     warmup_steps: int = 5000,
     decay_steps: int = 250000,
     device: str = "cuda",
@@ -85,6 +85,7 @@ def train(
             {"params": no_decay_params, "weight_decay": 0.0},
         ],
         lr=learning_rate,
+        betas=(0.9, 0.98),
     )
     criterion = torch.nn.CrossEntropyLoss()
 
@@ -219,7 +220,7 @@ def train(
         log_f.close()
 
 
-DATA_DIR = "training/data/processed"
+DATA_DIR = "training/data/"
 
 # configure as needed
 MODEL_CONFIG = ModelConfig(

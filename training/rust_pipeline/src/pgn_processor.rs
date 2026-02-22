@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
@@ -5,6 +6,7 @@ use std::path::Path;
 use pgn_reader::{BufferedReader, RawTag, SanPlus, Skip, Visitor};
 use shakmaty::fen::Fen;
 use shakmaty::uci::UciMove;
+use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::EnPassantMode;
 use shakmaty::{Chess, Position};
 
@@ -13,8 +15,11 @@ use crate::tokenizer;
 
 const LOG_EVERY_N_GAMES: u64 = 10_000;
 
-/// Visitor that tokenizes positions and writes 68-byte binary records:
-///   [66 bytes: tokens] [2 bytes: target (little-endian u16)]
+/// Visitor that tokenizes positions and writes binary records.
+///
+/// Record format depends on `v3c` flag:
+///   v3b (default): [66 bytes: tokens] [2 bytes: target] = 68 bytes
+///   v3c:           [67 bytes: tokens] [2 bytes: target] = 69 bytes
 struct PgnVisitor {
     writer: BufWriter<File>,
     pos: Chess,
@@ -31,10 +36,14 @@ struct PgnVisitor {
     black_elo: Option<u16>,
     /// Whether the current game passes the Elo filter (computed at end of headers).
     skip_game: bool,
+    /// When true, emit 67-byte tokens with a repetition-count token at index 66.
+    v3c: bool,
+    /// Position hash → occurrence count for the current game (v3c only).
+    position_counts: HashMap<u64, u8>,
 }
 
 impl PgnVisitor {
-    fn new(out_path: &Path, label: String, min_elo: Option<u16>) -> std::io::Result<Self> {
+    fn new(out_path: &Path, label: String, min_elo: Option<u16>, v3c: bool) -> std::io::Result<Self> {
         let file = File::create(out_path)?;
         let writer = BufWriter::new(file);
         Ok(PgnVisitor {
@@ -50,6 +59,8 @@ impl PgnVisitor {
             white_elo: None,
             black_elo: None,
             skip_game: false,
+            v3c,
+            position_counts: HashMap::new(),
         })
     }
 }
@@ -63,7 +74,14 @@ impl Visitor for PgnVisitor {
         self.white_elo = None;
         self.black_elo = None;
         self.skip_game = false;
+        self.position_counts.clear();
         self.games += 1;
+
+        if self.v3c {
+            // Record the starting position hash.
+            let hash = self.pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+            *self.position_counts.entry(hash).or_insert(0) += 1;
+        }
 
         if self.games % LOG_EVERY_N_GAMES == 0 {
             eprintln!(
@@ -122,18 +140,29 @@ impl Visitor for PgnVisitor {
         if should_keep(self.move_num) {
             let fen = Fen::from_position(&self.pos, EnPassantMode::Legal).to_string();
             let uci = UciMove::from_standard(m.clone()).to_string();
-
-            let tokens = tokenizer::tokenize_fen(&fen);
             let target = tokenizer::encode_uci_target(&uci);
 
-            let _ = self.writer.write_all(&tokens);
+            if self.v3c {
+                let hash = self.pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+                let rep_count = *self.position_counts.get(&hash).unwrap_or(&1);
+                let tokens = tokenizer::tokenize_fen_v3c(&fen, rep_count);
+                let _ = self.writer.write_all(&tokens);
+            } else {
+                let tokens = tokenizer::tokenize_fen(&fen);
+                let _ = self.writer.write_all(&tokens);
+            }
             let _ = self.writer.write_all(&target.to_le_bytes());
 
             self.kept += 1;
         }
 
-        self.pos.play_unchecked(m);
+        self.pos.play_unchecked(m.clone());
         self.move_num += 1;
+
+        if self.v3c {
+            let hash = self.pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal).0;
+            *self.position_counts.entry(hash).or_insert(0) += 1;
+        }
     }
 
     fn begin_variation(&mut self) -> Skip {
@@ -146,16 +175,18 @@ impl Visitor for PgnVisitor {
 /// Process a single PGN file, writing tokenized positions to a temp `.bin` file.
 ///
 /// If `min_elo` is `Some(n)`, only games where both players have Elo >= n are included.
+/// If `v3c` is true, records are 69 bytes (67 token bytes + 2 target bytes) with a
+/// repetition-count token; otherwise 68 bytes (66 + 2).
 ///
 /// Returns the path to the temp binary file.
-pub fn process_pgn_file(pgn_path: &Path, min_elo: Option<u16>) -> std::io::Result<std::path::PathBuf> {
+pub fn process_pgn_file(pgn_path: &Path, min_elo: Option<u16>, v3c: bool) -> std::io::Result<std::path::PathBuf> {
     let label = pgn_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
     let out_path = pgn_path.with_extension("bin");
-    let mut visitor = PgnVisitor::new(&out_path, label.clone(), min_elo)?;
+    let mut visitor = PgnVisitor::new(&out_path, label.clone(), min_elo, v3c)?;
 
     let file = File::open(pgn_path)?;
     let reader = BufReader::new(file);
