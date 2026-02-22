@@ -15,11 +15,11 @@ use crate::tokenizer;
 
 const LOG_EVERY_N_GAMES: u64 = 10_000;
 
-/// Visitor that tokenizes positions and writes binary records.
+/// Visitor that tokenizes positions and writes 68-byte binary records:
+///   [66 bytes: tokens] [2 bytes: target (little-endian u16)]
 ///
-/// Record format depends on `v3c` flag:
-///   v3b (default): [66 bytes: tokens] [2 bytes: target] = 68 bytes
-///   v3c:           [67 bytes: tokens] [2 bytes: target] = 69 bytes
+/// When `v3c` is true, the CLS token at position 65 is replaced by a
+/// repetition-count token; record size stays the same.
 struct PgnVisitor {
     writer: BufWriter<File>,
     pos: Chess,
@@ -36,7 +36,7 @@ struct PgnVisitor {
     black_elo: Option<u16>,
     /// Whether the current game passes the Elo filter (computed at end of headers).
     skip_game: bool,
-    /// When true, emit 67-byte tokens with a repetition-count token at index 66.
+    /// When true, replace the CLS token at index 65 with a repetition-count token.
     v3c: bool,
     /// Position hash → occurrence count for the current game (v3c only).
     position_counts: HashMap<u64, u8>,
@@ -175,8 +175,8 @@ impl Visitor for PgnVisitor {
 /// Process a single PGN file, writing tokenized positions to a temp `.bin` file.
 ///
 /// If `min_elo` is `Some(n)`, only games where both players have Elo >= n are included.
-/// If `v3c` is true, records are 69 bytes (67 token bytes + 2 target bytes) with a
-/// repetition-count token; otherwise 68 bytes (66 + 2).
+/// If `v3c` is true, the CLS token at position 65 is replaced by a
+/// repetition-count token (record size stays 68 bytes).
 ///
 /// Returns the path to the temp binary file.
 pub fn process_pgn_file(pgn_path: &Path, min_elo: Option<u16>, v3c: bool) -> std::io::Result<std::path::PathBuf> {

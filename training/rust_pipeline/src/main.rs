@@ -16,13 +16,9 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-/// Size of one binary record: token bytes + 2 target bytes.
-/// v3b: 66 + 2 = 68, v3c: 67 + 2 = 69.
-const RECORD_SIZE_V3B: usize = 68;
-const RECORD_SIZE_V3C: usize = 69;
-
-const TOKEN_WIDTH_V3B: usize = 66;
-const TOKEN_WIDTH_V3C: usize = 67;
+/// Size of one binary record: 66 token bytes + 2 target bytes.
+/// Same for both v3b and v3c (v3c replaces CLS with rep token, no size change).
+const RECORD_SIZE: usize = 68;
 
 #[derive(Parser)]
 #[command(name = "chet-data-pipeline")]
@@ -75,7 +71,7 @@ enum Command {
         #[arg(long, default_value = "42")]
         seed: u64,
 
-        /// Emit v3c tokens (67 bytes: 66 base + 1 repetition-count token)
+        /// Emit v3c tokens (replace CLS with repetition-count token)
         #[arg(long)]
         v3c: bool,
     },
@@ -110,7 +106,7 @@ enum Command {
         #[arg(long, default_value = "42")]
         seed: u64,
 
-        /// Emit v3c tokens (67 bytes: 66 base + 1 repetition-count token)
+        /// Emit v3c tokens (replace CLS with repetition-count token)
         #[arg(long)]
         v3c: bool,
     },
@@ -196,9 +192,6 @@ fn cmd_process(
     seed: u64,
     v3c: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let record_size = if v3c { RECORD_SIZE_V3C } else { RECORD_SIZE_V3B };
-    let token_width = if v3c { TOKEN_WIDTH_V3C } else { TOKEN_WIDTH_V3B };
-
     eprintln!("============================================================");
     eprintln!("PROCESSING DATA{}", if v3c { " (v3c — with repetition tokens)" } else { "" });
     eprintln!("============================================================");
@@ -272,19 +265,24 @@ fn cmd_process(
         fs::remove_file(bin_path)?;
     }
 
-    let n = raw_data.len() / record_size;
+    let n = raw_data.len() / RECORD_SIZE;
     assert_eq!(
-        raw_data.len() % record_size,
+        raw_data.len() % RECORD_SIZE,
         0,
-        "Binary data size is not a multiple of record size ({})",
-        record_size,
+        "Binary data size is not a multiple of record size"
     );
     eprintln!("Total positions: {}", n);
 
     // --- Shuffle if requested ---
     if shuffle {
         eprintln!("Shuffling {} records (seed={})...", n, seed);
-        shuffle_records(&mut raw_data, n, record_size, seed);
+        // Reinterpret as slice of fixed-size records for efficient shuffling.
+        // Safety: raw_data.len() is verified to be a multiple of RECORD_SIZE.
+        let records: &mut [[u8; RECORD_SIZE]] = unsafe {
+            std::slice::from_raw_parts_mut(raw_data.as_mut_ptr() as *mut [u8; RECORD_SIZE], n)
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        records.shuffle(&mut rng);
     }
 
     // --- Write .npy files ---
@@ -294,9 +292,9 @@ fn cmd_process(
     eprintln!("Writing {}...", tokens_path.display());
     {
         let mut f = BufWriter::new(File::create(&tokens_path)?);
-        npy::write_u8_header(&mut f, n, token_width)?;
-        for chunk in raw_data.chunks_exact(record_size) {
-            f.write_all(&chunk[..token_width])?;
+        npy::write_u8_header(&mut f, n)?;
+        for chunk in raw_data.chunks_exact(RECORD_SIZE) {
+            f.write_all(&chunk[..66])?;
         }
         f.flush()?;
     }
@@ -305,8 +303,8 @@ fn cmd_process(
     {
         let mut f = BufWriter::new(File::create(&targets_path)?);
         npy::write_u16_header(&mut f, n)?;
-        for chunk in raw_data.chunks_exact(record_size) {
-            f.write_all(&chunk[token_width..token_width + 2])?;
+        for chunk in raw_data.chunks_exact(RECORD_SIZE) {
+            f.write_all(&chunk[66..68])?;
         }
         f.flush()?;
     }
@@ -314,8 +312,8 @@ fn cmd_process(
     // --- Write metadata ---
     let metadata_path = output_dir.join("metadata.json");
     let metadata = format!(
-        "{{\n  \"num_positions\": {},\n  \"token_width\": {}\n}}\n",
-        n, token_width
+        "{{\n  \"num_positions\": {}\n}}\n",
+        n
     );
     fs::write(&metadata_path, metadata)?;
 
@@ -330,21 +328,4 @@ fn cmd_process(
     eprintln!("  targets.npy: {:.1} MB", targets_size as f64 / 1e6);
 
     Ok(())
-}
-
-/// Shuffle fixed-size records in-place.
-fn shuffle_records(raw_data: &mut Vec<u8>, n: usize, record_size: usize, seed: u64) {
-    // Fisher-Yates shuffle on variable-size records via index permutation + copy.
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut indices: Vec<usize> = (0..n).collect();
-    indices.shuffle(&mut rng);
-
-    let mut shuffled = vec![0u8; raw_data.len()];
-    for (dst, &src) in indices.iter().enumerate() {
-        let src_start = src * record_size;
-        let dst_start = dst * record_size;
-        shuffled[dst_start..dst_start + record_size]
-            .copy_from_slice(&raw_data[src_start..src_start + record_size]);
-    }
-    *raw_data = shuffled;
 }

@@ -1,28 +1,31 @@
 /// FEN tokenization and UCI target encoding, matching chet/tokenizer.py
 /// and chet/tokenizer_v3c.py.
 ///
-/// Token vocabulary (19 tokens):
+/// Base vocabulary (16 tokens, v3b):
 ///   0      = empty square
 ///   1–6    = white P, N, B, R, Q, K
 ///   7–12   = black p, n, b, r, q, k
 ///   13     = white to move
 ///   14     = black to move
 ///   15     = [CLS]
-///   16     = position seen 1× (v3c only)
-///   17     = position seen 2× (v3c only)
-///   18     = position seen 3+× (v3c only)
+///
+/// v3c vocabulary (18 tokens — CLS replaced by repetition tokens):
+///   0–14   = same as above
+///   15     = position seen 1× (replaces CLS)
+///   16     = position seen 2×
+///   17     = position seen 3+×
 ///
 /// v3b layout (66 tokens): [sq0..sq63] [turn] [CLS]
-/// v3c layout (67 tokens): [sq0..sq63] [turn] [CLS] [rep_count]
+/// v3c layout (66 tokens): [sq0..sq63] [turn] [rep_count]
 ///
 /// Square indices: a1=0, b1=1, ..., h8=63 (python-chess convention).
 
 const TOKEN_TURN_WHITE: u8 = 13;
 const TOKEN_TURN_BLACK: u8 = 14;
 const TOKEN_CLS: u8 = 15;
-const TOKEN_REP_1: u8 = 16;
-const TOKEN_REP_2: u8 = 17;
-const TOKEN_REP_3_PLUS: u8 = 18;
+const TOKEN_REP_1: u8 = 15;
+const TOKEN_REP_2: u8 = 16;
+const TOKEN_REP_3_PLUS: u8 = 17;
 
 /// Lookup table: ASCII byte → piece token ID (0 for non-piece chars).
 const fn build_piece_table() -> [u8; 128] {
@@ -77,17 +80,15 @@ pub fn tokenize_fen(fen: &str) -> [u8; 66] {
     tokens
 }
 
-/// Parse a FEN string into a 67-element token array (v3c format).
+/// Parse a FEN string into a 66-element token array (v3c format).
 ///
-/// Identical to `tokenize_fen` for positions 0–65, plus an appended
-/// repetition-count token at position 66.
-pub fn tokenize_fen_v3c(fen: &str, repetition_count: u8) -> [u8; 67] {
-    let mut tokens = [0u8; 67];
+/// Identical to `tokenize_fen` for positions 0–64, but replaces the CLS
+/// token at position 65 with a repetition-count token.  Record size stays
+/// at 66 bytes.
+pub fn tokenize_fen_v3c(fen: &str, repetition_count: u8) -> [u8; 66] {
+    let mut tokens = tokenize_fen(fen);
 
-    let base = tokenize_fen(fen);
-    tokens[..66].copy_from_slice(&base);
-
-    tokens[66] = match repetition_count {
+    tokens[65] = match repetition_count {
         0 | 1 => TOKEN_REP_1,
         2 => TOKEN_REP_2,
         _ => TOKEN_REP_3_PLUS,
@@ -179,19 +180,20 @@ mod tests {
         let fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
         let t1 = tokenize_fen_v3c(fen, 1);
-        assert_eq!(t1[66], 16); // rep×1
+        assert_eq!(t1[65], 15); // rep×1 (same value as old CLS)
+        assert_eq!(t1.len(), 66);
 
         let t2 = tokenize_fen_v3c(fen, 2);
-        assert_eq!(t2[66], 17); // rep×2
+        assert_eq!(t2[65], 16); // rep×2
 
         let t3 = tokenize_fen_v3c(fen, 3);
-        assert_eq!(t3[66], 18); // rep×3+
+        assert_eq!(t3[65], 17); // rep×3+
 
         let t5 = tokenize_fen_v3c(fen, 5);
-        assert_eq!(t5[66], 18); // rep×3+ (clamped)
+        assert_eq!(t5[65], 17); // rep×3+ (clamped)
 
-        // First 66 bytes should be identical to the base tokenizer
+        // First 65 bytes (squares + turn) should be identical to the base tokenizer
         let base = tokenize_fen(fen);
-        assert_eq!(&t1[..66], &base[..]);
+        assert_eq!(&t1[..65], &base[..65]);
     }
 }

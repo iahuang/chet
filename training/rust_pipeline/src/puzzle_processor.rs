@@ -17,8 +17,8 @@ use crate::tokenizer;
 /// Every player move (odd indices: 1, 3, 5, ...) produces a binary record
 /// with the tokenized FEN and the move target. No sampling is applied to puzzles.
 ///
-/// If `v3c` is true, records are 69 bytes (67 + 2) with a repetition-count token;
-/// otherwise 68 bytes (66 + 2).
+/// If `v3c` is true, the CLS token at position 65 is replaced by a
+/// repetition-count token (record size stays 68 bytes).
 ///
 /// Returns the path to the temp binary file and the number of positions written.
 pub fn process_puzzles(

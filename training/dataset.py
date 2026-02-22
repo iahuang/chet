@@ -55,14 +55,11 @@ def load_dataset(
     with open(os.path.join(data_dir, "metadata.json")) as f:
         metadata = json.load(f)
     N = metadata["num_positions"]
-    token_width = metadata.get("token_width", 66)  # 66 for v3b, 67 for v3c
 
     tokens = np.load(os.path.join(data_dir, "tokens.npy"), mmap_mode="r")
     targets = np.load(os.path.join(data_dir, "targets.npy"), mmap_mode="r")
 
-    assert tokens.shape == (N, token_width), (
-        f"Expected tokens shape ({N}, {token_width}), got {tokens.shape}"
-    )
+    assert tokens.shape == (N, 66), f"Expected tokens shape ({N}, 66), got {tokens.shape}"
     assert targets.shape == (N,), f"Expected targets shape ({N},), got {targets.shape}"
 
     n_val = int(N * val_split)

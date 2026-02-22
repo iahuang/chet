@@ -2,11 +2,13 @@
 Chet v3c — Extends v3b with threefold-repetition awareness.
 
 Changes from v3b:
-  - Sequence length 66 → 67.  A repetition-count token is appended at
-    position 66 (after CLS at 65).  Vocab grows from 16 → 19 to hold three
-    new tokens (rep×1, rep×2, rep×3+).
-  - All other components (SwiGLU FFN, RMSNorm, cross-attention move head)
-    are identical to v3b.
+  - CLS token removed; replaced by a repetition-count token at the same
+    position (index 65).  Sequence length stays at 66.
+  - Vocab 16 → 18: old CLS (15) is repurposed as rep×1 (15), plus two new
+    tokens rep×2 (16) and rep×3+ (17).
+  - Move-prediction from-head no longer concatenates a global context vector;
+    it operates on per-square embeddings only (the transformer already fuses
+    global context via self-attention over the turn and repetition tokens).
 """
 
 import torch
@@ -62,7 +64,7 @@ class RMSNorm(nn.Module):
 class PieceEmbedder(nn.Module):
     """Embeds chess tokens (pieces + special tokens) into a continuous vector space."""
 
-    VOCAB_SIZE = 19  # 0–12 pieces, 13–14 turn, 15 CLS, 16–18 repetition
+    VOCAB_SIZE = 18  # 0–12 pieces, 13–14 turn, 15–17 repetition
 
     def __init__(self, embedding_dim: int) -> None:
         super().__init__()
@@ -87,13 +89,15 @@ class PositionalEmbedding(nn.Module):
 
 
 class BoardEmbedder(nn.Module):
-    """Combines piece and positional embeddings for the 67-token board input.
+    """Combines piece and positional embeddings for the 66-token board input.
 
     Token layout:
-        [sq0..sq63]  [turn]  [CLS]  [rep_count]
-         indices 0–63   64     65       66
+        [sq0..sq63]  [turn]  [rep_count]
+         indices 0–63   64       65
 
     Only the 64 square tokens receive positional embeddings.
+    The repetition-count token at index 65 serves as the global context
+    vector (replacing the CLS token from v3b).
     """
 
     def __init__(self, *, embed_dim: int) -> None:
@@ -103,7 +107,7 @@ class BoardEmbedder(nn.Module):
 
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
         batch_size = board_tokens.size(0)
-        x = self.piece_embedder(board_tokens)       # [batch, 67, embed_dim]
+        x = self.piece_embedder(board_tokens)       # [batch, 66, embed_dim]
         pos_emb = self.pos_embedder(batch_size)      # [batch, 64, embed_dim]
         x[:, :64, :] = x[:, :64, :] + pos_emb
         return x
@@ -170,7 +174,12 @@ class TransformerLayer(nn.Module):
 
 
 class MovePredictor(nn.Module):
-    """Factored move prediction: from-head MLP + multi-head bilinear to-head."""
+    """Factored move prediction: from-head MLP + multi-head bilinear to-head.
+
+    Unlike v3b, global context (repetition token) is not concatenated into the
+    from-head — the transformer already fuses that information into the
+    per-square representations via self-attention.
+    """
 
     def __init__(self, embed_dim: int, n_move_heads: int = 8) -> None:
         super().__init__()
@@ -182,7 +191,7 @@ class MovePredictor(nn.Module):
         self.scale = self.head_dim**-0.5
 
         self.from_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
+            nn.Linear(embed_dim, embed_dim),
             nn.GELU(),
             nn.Linear(embed_dim, 1),
         )
@@ -191,13 +200,11 @@ class MovePredictor(nn.Module):
         self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
     def forward(
-        self, x: torch.Tensor, cls: torch.Tensor
+        self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = x.shape
 
-        expanded_cls = cls.unsqueeze(1).expand(-1, seq_len, -1)
-        from_input = torch.cat([x, expanded_cls], dim=-1)
-        from_scores = self.from_head(from_input).squeeze(-1)
+        from_scores = self.from_head(x).squeeze(-1)  # [batch, 64]
 
         Q = self.query_proj(x)
         K = self.key_proj(x)
@@ -206,7 +213,7 @@ class MovePredictor(nn.Module):
         K = K.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
 
         to_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        to_scores = to_scores.sum(dim=1)
+        to_scores = to_scores.sum(dim=1)  # [batch, 64, 64]
 
         return from_scores, to_scores
 
@@ -220,8 +227,9 @@ class Chet(nn.Module):
     """Complete transformer model for chess move prediction (v3c).
 
     Architecture identical to v3b except:
-      - 67-token input (extra repetition-count token at index 66)
-      - Vocab size 19 (3 new repetition tokens: 16, 17, 18)
+      - CLS token replaced by repetition-count token at index 65 (same
+        sequence length of 66)
+      - Vocab size 18 (rep tokens at 15, 16, 17 replace old CLS at 15)
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -242,19 +250,16 @@ class Chet(nn.Module):
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
         batch_size = board_tokens.size(0)
 
-        x = self.board_embedder(board_tokens)  # [batch, 67, embed_dim]
+        x = self.board_embedder(board_tokens)  # [batch, 66, embed_dim]
 
         for layer in self.transformer_layers:
             x = layer(x)
 
         x = self.norm(x)
 
-        # CLS is still at index 65; rep-count at 66 participates in attention
-        # but is not explicitly read by the move head.
-        cls_embedding = x[:, 65, :]       # [batch, embed_dim]
         piece_embeddings = x[:, 0:64, :]  # [batch, 64, embed_dim]
 
-        from_logits, to_logits = self.move_predictor(piece_embeddings, cls_embedding)
+        from_logits, to_logits = self.move_predictor(piece_embeddings)
         full_logits = from_logits.unsqueeze(-1) + to_logits
         full_logits = full_logits.view(batch_size, 64 * 64)
 

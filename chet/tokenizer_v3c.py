@@ -1,40 +1,39 @@
 """
-Tokenizer for Chet v3c — extends the v3/v3b tokenizer with a repetition-count
-token so the model can reason about threefold-repetition draws.
+Tokenizer for Chet v3c — replaces the CLS token from v3b with a
+repetition-count token so the model can reason about threefold-repetition
+draws.  Sequence length stays at 66, matching v3b.
 
-Token vocabulary (19 tokens):
+Token vocabulary (18 tokens):
     0      empty square
     1–6    white P, N, B, R, Q, K
     7–12   black p, n, b, r, q, k
     13     white to move
     14     black to move
-    15     [CLS]
-    16     position seen 1× (no repetition)
-    17     position seen 2× (one repetition — threefold is one move away)
-    18     position seen 3+× (threefold repetition claimable)
+    15     position seen 1× (no repetition)
+    16     position seen 2× (one repetition — threefold is one move away)
+    17     position seen 3+× (threefold repetition claimable)
 
-Layout (67 tokens):
-    [sq0 .. sq63]  [turn: 13|14]  [CLS]  [rep_count: 16|17|18]
+Layout (66 tokens):
+    [sq0 .. sq63]  [turn: 13|14]  [rep_count: 15|16|17]
 """
 
 import chess
 import torch
 
 
-VOCAB_SIZE = 19
-SEQ_LEN = 67
+VOCAB_SIZE = 18
+SEQ_LEN = 66
 
 TOKEN_TURN_WHITE = 13
 TOKEN_TURN_BLACK = 14
-TOKEN_CLS = 15
 
-TOKEN_REP_1 = 16
-TOKEN_REP_2 = 17
-TOKEN_REP_3_PLUS = 18
+TOKEN_REP_1 = 15
+TOKEN_REP_2 = 16
+TOKEN_REP_3_PLUS = 17
 
 
 def tokenize_board(board: chess.Board, repetition_count: int = 1) -> torch.Tensor:
-    """Tokenize a board position into 67 tokens (v3c format).
+    """Tokenize a board position into 66 tokens (v3c format).
 
     Args:
         board: The current board state.
@@ -49,8 +48,7 @@ def tokenize_board(board: chess.Board, repetition_count: int = 1) -> torch.Tenso
         tokens[i] = _piece_token(board.piece_at(i))
 
     tokens[64] = TOKEN_TURN_WHITE if board.turn == chess.WHITE else TOKEN_TURN_BLACK
-    tokens[65] = TOKEN_CLS
-    tokens[66] = _repetition_token(repetition_count)
+    tokens[65] = _repetition_token(repetition_count)
 
     return tokens
 
