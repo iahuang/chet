@@ -1,6 +1,7 @@
 .DS_Store
 *.pyc
 *.pt
+__pycache__/
 
 # used for internal testing and development
 .data/
@@ -8,3 +9,10 @@
 
 *.csv
 *.pgn
+
+training/data/
+training/rust_pipeline/target/
+
+model_best.pth
+
+.venv
