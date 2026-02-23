@@ -89,7 +89,6 @@ def train(
     )
     criterion = torch.nn.CrossEntropyLoss()
 
-    # Mixed precision: bf16 on A100 (no GradScaler needed for bf16)
     autocast_ctx = torch.amp.autocast(device, dtype=torch.bfloat16)
 
     # Setup learning rate scheduler: linear warmup + cosine decay (step-based)

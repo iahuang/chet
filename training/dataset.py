@@ -59,7 +59,7 @@ def load_dataset(
     tokens = np.load(os.path.join(data_dir, "tokens.npy"), mmap_mode="r")
     targets = np.load(os.path.join(data_dir, "targets.npy"), mmap_mode="r")
 
-    assert tokens.shape == (N, 66), f"Expected tokens shape ({N}, 66), got {tokens.shape}"
+    assert tokens.shape == (N, 65), f"Expected tokens shape ({N}, 65), got {tokens.shape}"
     assert targets.shape == (N,), f"Expected targets shape ({N},), got {targets.shape}"
 
     n_val = int(N * val_split)

@@ -1,19 +1,17 @@
 /// FEN tokenization and UCI target encoding, matching chet/tokenizer.py.
 ///
-/// Token vocabulary (16 tokens):
+/// Token vocabulary (15 tokens):
 ///   0      = empty square
 ///   1–6    = white P, N, B, R, Q, K
 ///   7–12   = black p, n, b, r, q, k
 ///   13     = white to move
 ///   14     = black to move
-///   15     = [CLS]
 ///
-/// Input layout (66 tokens): [sq0..sq63] [turn] [CLS]
+/// Input layout (65 tokens): [sq0..sq63] [turn]
 /// Square indices: a1=0, b1=1, ..., h8=63 (python-chess convention).
 
 const TOKEN_TURN_WHITE: u8 = 13;
 const TOKEN_TURN_BLACK: u8 = 14;
-const TOKEN_CLS: u8 = 15;
 
 /// Lookup table: ASCII byte → piece token ID (0 for non-piece chars).
 const fn build_piece_table() -> [u8; 128] {
@@ -35,9 +33,9 @@ const fn build_piece_table() -> [u8; 128] {
 
 static PIECE_TABLE: [u8; 128] = build_piece_table();
 
-/// Parse a FEN string into a 66-element token array.
-pub fn tokenize_fen(fen: &str) -> [u8; 66] {
-    let mut tokens = [0u8; 66];
+/// Parse a FEN string into a 65-element token array.
+pub fn tokenize_fen(fen: &str) -> [u8; 65] {
+    let mut tokens = [0u8; 65];
     let bytes = fen.as_bytes();
 
     // Find the space separating piece placement from the rest.
@@ -63,7 +61,6 @@ pub fn tokenize_fen(fen: &str) -> [u8; 66] {
         b'w'
     };
     tokens[64] = if turn == b'w' { TOKEN_TURN_WHITE } else { TOKEN_TURN_BLACK };
-    tokens[65] = TOKEN_CLS;
 
     tokens
 }
@@ -122,9 +119,8 @@ mod tests {
         assert_eq!(tokens[62], 8);  // g8 = black n
         assert_eq!(tokens[63], 10); // h8 = black r
 
-        // Turn + CLS
+        // Turn
         assert_eq!(tokens[64], TOKEN_TURN_WHITE);
-        assert_eq!(tokens[65], TOKEN_CLS);
     }
 
     #[test]

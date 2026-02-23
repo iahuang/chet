@@ -27,14 +27,13 @@ PIECE_TO_TOKEN = {
 
 TOKEN_TURN_WHITE = 13
 TOKEN_TURN_BLACK = 14
-TOKEN_CLS = 15
 
 
 def parse_fen_tokens(fen: str, out: np.ndarray) -> None:
-    """Parse a FEN string into a pre-allocated 66-element uint8 array.
+    """Parse a FEN string into a pre-allocated 65-element uint8 array.
 
     Layout matches chet/tokenizer.py:
-        [sq0 .. sq63] [turn_token] [CLS]
+        [sq0 .. sq63] [turn_token]
     Square indices use python-chess convention: a1=0, b1=1, ..., h8=63.
     """
     out[:64] = 0
@@ -54,7 +53,6 @@ def parse_fen_tokens(fen: str, out: np.ndarray) -> None:
             sq += 1
 
     out[64] = TOKEN_TURN_WHITE if turn_char == "w" else TOKEN_TURN_BLACK
-    out[65] = TOKEN_CLS
 
 
 def parse_uci_target(uci: str) -> int:
@@ -110,14 +108,14 @@ def main() -> None:
         write_targets_path = targets_path
 
     tokens = np.lib.format.open_memmap(
-        write_tokens_path, mode="w+", dtype=np.uint8, shape=(N, 66)
+        write_tokens_path, mode="w+", dtype=np.uint8, shape=(N, 65)
     )
     targets = np.lib.format.open_memmap(
         write_targets_path, mode="w+", dtype=np.uint16, shape=(N,)
     )
 
     # --- Step 3: parse CSV and fill arrays ---
-    row_buf = np.zeros(66, dtype=np.uint8)
+    row_buf = np.zeros(65, dtype=np.uint8)
 
     with open(args.csv_path, "r") as f:
         reader = csv.reader(f)
@@ -138,7 +136,7 @@ def main() -> None:
         perm = rng.permutation(N)
 
         shuffled_tokens = np.lib.format.open_memmap(
-            tokens_path, mode="w+", dtype=np.uint8, shape=(N, 66)
+            tokens_path, mode="w+", dtype=np.uint8, shape=(N, 65)
         )
         shuffled_targets = np.lib.format.open_memmap(
             targets_path, mode="w+", dtype=np.uint16, shape=(N,)

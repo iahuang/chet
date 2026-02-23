@@ -64,20 +64,51 @@ class PositionalEmbedding(nn.Module):
 
 
 class BoardEmbedder(nn.Module):
-    """Combines piece and positional embeddings for the 66-token board input."""
+    """Combines piece and positional embeddings for the 65-token board input.
+
+    Input layout: [sq0..sq63, turn_token].  Positional embeddings are added
+    only to the 64 square tokens; the turn token carries no spatial position.
+    """
+
+    VOCAB_SIZE = 15
 
     def __init__(self, *, embed_dim: int) -> None:
         super().__init__()
-        VOCAB_SIZE = 16
-        self.piece_embedder = PieceEmbedder(VOCAB_SIZE, embed_dim)
+        self.piece_embedder = PieceEmbedder(self.VOCAB_SIZE, embed_dim)
         self.pos_embedder = PositionalEmbedding(embed_dim)
 
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
         batch_size = board_tokens.size(0)
         x = self.piece_embedder(board_tokens)
-        pos_emb = self.pos_embedder(batch_size)
-        x[:, :64, :] = x[:, :64, :] + pos_emb
+        x[:, :64, :] = x[:, :64, :] + self.pos_embedder(batch_size)
         return x
+
+
+class Attention(nn.Module):
+    """Multi-head self-attention with explicit Q/K/V/O projections.
+
+    Uses F.scaled_dot_product_attention for automatic FlashAttention / memory-
+    efficient kernel selection.
+    """
+
+    def __init__(self, embed_dim: int, n_heads: int) -> None:
+        super().__init__()
+        self.n_heads = n_heads
+        self.head_dim = embed_dim // n_heads
+        self.embed_dim = embed_dim
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, S, _ = x.shape
+        q = self.q_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
+        out = F.scaled_dot_product_attention(q, k, v)
+        out = out.transpose(1, 2).contiguous().view(B, S, self.embed_dim)
+        return self.out_proj(out)
 
 
 class SwiGLU_FFN(nn.Module):
@@ -103,37 +134,34 @@ class SwiGLU_FFN(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    """Pre-norm transformer layer with multi-head attention and SwiGLU FFN."""
+    """Pre-norm transformer layer with multi-head self-attention and SwiGLU FFN."""
 
     def __init__(self, embed_dim: int, n_heads: int) -> None:
         super().__init__()
-        self.attn = nn.MultiheadAttention(embed_dim, n_heads, batch_first=True)
+        self.attn = Attention(embed_dim, n_heads)
         self.ffn = SwiGLU_FFN(embed_dim)
         self.norm1 = RMSNorm(embed_dim)
         self.norm2 = RMSNorm(embed_dim)
         self.embed_dim = embed_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Pre-norm attention
-        x_attn = self.norm1(x)
-        attd = self.attn(x_attn, x_attn, x_attn, need_weights=False)[0]
-        x = x + attd
-
-        # Pre-norm SwiGLU FFN
-        x_ffn = self.norm2(x)
-        ffn_out = self.ffn(x_ffn)
-        x = x + ffn_out
-
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
         return x
 
 
 # ---------------------------------------------------------------------------
-# Move prediction head (unchanged from v3)
+# Move prediction head
 # ---------------------------------------------------------------------------
 
 
 class MovePredictor(nn.Module):
-    """Factored move prediction: from-head MLP + multi-head bilinear to-head."""
+    """Factored move prediction: from-head MLP + multi-head bilinear to-head.
+
+    The from-head scores each square independently using its (already
+    contextualized) embedding.  The to-head uses multi-head bilinear Q·K
+    attention over square embeddings to score from→to pairs.
+    """
 
     def __init__(self, embed_dim: int, n_move_heads: int = 8) -> None:
         super().__init__()
@@ -144,33 +172,22 @@ class MovePredictor(nn.Module):
         self.head_dim = embed_dim // n_move_heads
         self.scale = self.head_dim**-0.5
 
-        # From-square head (per-square MLP with CLS context)
         self.from_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
+            nn.Linear(embed_dim, embed_dim, bias=False),
             nn.GELU(),
             nn.Linear(embed_dim, 1),
         )
 
-        # To-square head (multi-head bilinear Q·K scoring)
         self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
-    def forward(
-        self, x: torch.Tensor, cls: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size, seq_len, _ = x.shape
+    def forward(self, squares: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, seq_len, _ = squares.shape
 
-        # From-square scores
-        expanded_cls = cls.unsqueeze(1).expand(-1, seq_len, -1)
-        from_input = torch.cat([x, expanded_cls], dim=-1)  # [batch, 64, 2·D]
-        from_scores = self.from_head(from_input).squeeze(-1)  # [batch, 64]
+        from_scores = self.from_head(squares).squeeze(-1)  # [batch, 64]
 
-        # To-square scores via multi-head bilinear attention
-        Q = self.query_proj(x)  # [batch, 64, D]
-        K = self.key_proj(x)  # [batch, 64, D]
-
-        Q = Q.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
-        K = K.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        Q = self.query_proj(squares).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        K = self.key_proj(squares).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
 
         to_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
         to_scores = to_scores.sum(dim=1)  # [batch, 64, 64]
@@ -179,11 +196,14 @@ class MovePredictor(nn.Module):
 
 
 class Chet(nn.Module):
-    """Complete transformer model for chess move prediction (v3b).
+    """Transformer model for chess move prediction.
 
-    Architecture identical to v3 except:
-      - SwiGLU FFN (matched param count)
-      - RMSNorm everywhere
+    Input: 65 tokens = 64 board squares + 1 turn indicator.
+    Output: 4096 logits (64 from-squares x 64 to-squares).
+
+    The turn token participates in self-attention so every square embedding is
+    conditioned on whose move it is.  Only the 64 square embeddings are fed to
+    the move prediction head.
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -204,22 +224,16 @@ class Chet(nn.Module):
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
         batch_size = board_tokens.size(0)
 
-        # 1) Embed the board
-        x = self.board_embedder(board_tokens)  # [batch, 66, embed_dim]
+        x = self.board_embedder(board_tokens)  # [batch, 65, embed_dim]
 
-        # 2) Transformer layers
         for layer in self.transformer_layers:
             x = layer(x)
 
-        # 3) Final normalization
         x = self.norm(x)
 
-        # 4) Separate CLS token and 64 squares
-        cls_embedding = x[:, 65, :]  # [batch, embed_dim]
-        piece_embeddings = x[:, 0:64, :]  # [batch, 64, embed_dim]
+        squares = x[:, :64, :]  # [batch, 64, embed_dim]
 
-        # 5) Predict moves
-        from_logits, to_logits = self.move_predictor(piece_embeddings, cls_embedding)
+        from_logits, to_logits = self.move_predictor(squares)
         full_logits = from_logits.unsqueeze(-1) + to_logits
         full_logits = full_logits.view(batch_size, 64 * 64)
 

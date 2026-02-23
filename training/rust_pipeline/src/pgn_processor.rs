@@ -13,8 +13,8 @@ use crate::tokenizer;
 
 const LOG_EVERY_N_GAMES: u64 = 10_000;
 
-/// Visitor that tokenizes positions and writes 68-byte binary records:
-///   [66 bytes: tokens] [2 bytes: target (little-endian u16)]
+/// Visitor that tokenizes positions and writes 67-byte binary records:
+///   [65 bytes: tokens] [2 bytes: target (little-endian u16)]
 struct PgnVisitor {
     writer: BufWriter<File>,
     pos: Chess,

@@ -12,7 +12,7 @@ use crate::tokenizer;
 /// Process a zstd-compressed puzzle CSV, writing tokenized positions to a temp `.bin` file.
 ///
 /// Each puzzle's move sequence alternates: opponent move, player move, opponent, player, ...
-/// Every player move (odd indices: 1, 3, 5, ...) produces a 68-byte binary record
+/// Every player move (odd indices: 1, 3, 5, ...) produces a 67-byte binary record
 /// with the tokenized FEN and the move target. No sampling is applied to puzzles.
 ///
 /// Returns the path to the temp binary file and the number of positions written.

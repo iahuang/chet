@@ -1,9 +1,8 @@
 """LoRA fine-tuning for Chet v2.
 
-Decomposes the fused nn.MultiheadAttention QKV into explicit Q/K/V/O
-projections, wraps target linear layers with low-rank adapters, and trains
-only the adapter weights. Produces checkpoints compatible with the original
-Chet model (fused QKV format).
+Wraps target linear layers (attention Q/K/V/O and FFN projections) with
+low-rank adapters and trains only the adapter weights.  Produces checkpoints
+compatible with the base Chet model.
 
 Usage:
     python -m training.finetune_lora \
@@ -22,7 +21,6 @@ import time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -67,57 +65,6 @@ class LoRALinear(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Decomposed multi-head attention (explicit Q/K/V/O projections)
-# ---------------------------------------------------------------------------
-
-
-class DecomposedAttention(nn.Module):
-    """Self-attention with separate Q/K/V/O linear projections.
-
-    Functionally equivalent to nn.MultiheadAttention(batch_first=True) but
-    with individually addressable projection layers for LoRA injection.
-    """
-
-    def __init__(self, embed_dim: int, n_heads: int) -> None:
-        super().__init__()
-        self.n_heads = n_heads
-        self.head_dim = embed_dim // n_heads
-        self.embed_dim = embed_dim
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim)
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-
-    @classmethod
-    def from_mha(cls, mha: nn.MultiheadAttention) -> DecomposedAttention:
-        """Transfer weights from a fused nn.MultiheadAttention."""
-        d = mha.embed_dim
-        obj = cls(d, mha.num_heads)
-        w = mha.in_proj_weight.data
-        obj.q_proj.weight.data.copy_(w[:d])
-        obj.k_proj.weight.data.copy_(w[d : 2 * d])
-        obj.v_proj.weight.data.copy_(w[2 * d :])
-        if mha.in_proj_bias is not None:
-            b = mha.in_proj_bias.data
-            obj.q_proj.bias.data.copy_(b[:d])
-            obj.k_proj.bias.data.copy_(b[d : 2 * d])
-            obj.v_proj.bias.data.copy_(b[2 * d :])
-        obj.out_proj.weight.data.copy_(mha.out_proj.weight.data)
-        if mha.out_proj.bias is not None:
-            obj.out_proj.bias.data.copy_(mha.out_proj.bias.data)
-        return obj
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, S, _ = x.shape
-        q = self.q_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(B, S, self.n_heads, self.head_dim).transpose(1, 2)
-        out = F.scaled_dot_product_attention(q, k, v)
-        out = out.transpose(1, 2).contiguous().view(B, S, self.embed_dim)
-        return self.out_proj(out)
-
-
-# ---------------------------------------------------------------------------
 # LoRA-adapted transformer layer
 # ---------------------------------------------------------------------------
 
@@ -126,11 +73,10 @@ DEFAULT_TARGETS = ALL_TARGETS
 
 
 class LoRATransformerLayer(nn.Module):
-    """Transformer layer with decomposed attention and LoRA adapters.
+    """Transformer layer with LoRA adapters on target projections.
 
-    Takes ownership of the norms and FFN from the original layer and replaces
-    the fused MHA with a DecomposedAttention. Target projections are wrapped
-    with LoRALinear.
+    Takes ownership of the sub-modules from the original TransformerLayer
+    and wraps selected linear layers with LoRALinear.
     """
 
     def __init__(
@@ -145,7 +91,7 @@ class LoRATransformerLayer(nn.Module):
         self.norm2 = original_layer.norm2
         self.ffn = original_layer.ffn
         self.embed_dim = original_layer.embed_dim
-        self.attn = DecomposedAttention.from_mha(original_layer.attn)
+        self.attn = original_layer.attn
 
         attn_targets = targets & {"q_proj", "k_proj", "v_proj", "out_proj"}
         for name in attn_targets:
@@ -226,40 +172,27 @@ def export_merged_state_dict(model: Chet) -> dict[str, torch.Tensor]:
     """Merge LoRA deltas and return a state_dict compatible with vanilla Chet."""
     sd: dict[str, torch.Tensor] = {}
 
-    # Board embedder + final norm (unchanged)
     for name, param in model.board_embedder.named_parameters():
         sd[f"board_embedder.{name}"] = param.data.detach()
     for name, buf in model.board_embedder.named_buffers():
         sd[f"board_embedder.{name}"] = buf.detach()
     sd["norm.weight"] = model.norm.weight.data.detach()
 
-    # Move predictor (unchanged)
     for name, param in model.move_predictor.named_parameters():
         sd[f"move_predictor.{name}"] = param.data.detach()
 
-    # Transformer layers: reconstruct fused QKV format
     for i, layer in enumerate(model.transformer_layers):
         p = f"transformer_layers.{i}."
         sd[f"{p}norm1.weight"] = layer.norm1.weight.data.detach()
         sd[f"{p}norm2.weight"] = layer.norm2.weight.data.detach()
-        sd[f"{p}embed_dim"] = torch.tensor(layer.embed_dim)  # stored as buffer if needed
 
         attn = layer.attn
-        q_w = _get_weight(attn.q_proj)
-        k_w = _get_weight(attn.k_proj)
-        v_w = _get_weight(attn.v_proj)
-        sd[f"{p}attn.in_proj_weight"] = torch.cat([q_w, k_w, v_w], dim=0)
-
-        q_b = _get_bias(attn.q_proj)
-        if q_b is not None:
-            k_b = _get_bias(attn.k_proj)
-            v_b = _get_bias(attn.v_proj)
-            sd[f"{p}attn.in_proj_bias"] = torch.cat([q_b, k_b, v_b], dim=0)
-
-        sd[f"{p}attn.out_proj.weight"] = _get_weight(attn.out_proj)
-        out_b = _get_bias(attn.out_proj)
-        if out_b is not None:
-            sd[f"{p}attn.out_proj.bias"] = out_b
+        for proj_name in ("q_proj", "k_proj", "v_proj", "out_proj"):
+            proj = getattr(attn, proj_name)
+            sd[f"{p}attn.{proj_name}.weight"] = _get_weight(proj)
+            b = _get_bias(proj)
+            if b is not None:
+                sd[f"{p}attn.{proj_name}.bias"] = b
 
         ffn = layer.ffn
         for fname in ("w1", "w2", "w3"):

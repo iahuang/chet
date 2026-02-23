@@ -16,8 +16,8 @@ use rand::SeedableRng;
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-/// Size of one binary record: 66 token bytes + 2 target bytes.
-const RECORD_SIZE: usize = 68;
+/// Size of one binary record: 65 token bytes + 2 target bytes.
+const RECORD_SIZE: usize = 67;
 
 #[derive(Parser)]
 #[command(name = "chet-data-pipeline")]
@@ -280,7 +280,7 @@ fn cmd_process(
         let mut f = BufWriter::new(File::create(&tokens_path)?);
         npy::write_u8_header(&mut f, n)?;
         for chunk in raw_data.chunks_exact(RECORD_SIZE) {
-            f.write_all(&chunk[..66])?;
+            f.write_all(&chunk[..65])?;
         }
         f.flush()?;
     }
@@ -290,7 +290,7 @@ fn cmd_process(
         let mut f = BufWriter::new(File::create(&targets_path)?);
         npy::write_u16_header(&mut f, n)?;
         for chunk in raw_data.chunks_exact(RECORD_SIZE) {
-            f.write_all(&chunk[66..68])?;
+            f.write_all(&chunk[65..67])?;
         }
         f.flush()?;
     }
