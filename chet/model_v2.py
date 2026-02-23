@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-import chess
 import torch.nn.functional as F
+import chess
 from dataclasses import dataclass
 
 
@@ -10,14 +10,14 @@ class ModelConfig:
     embed_dim: int
     n_heads: int
     n_layers: int
-    dropout: float
+    n_move_heads: int = 8
 
     def as_dict(self):
         return {
             "embed_dim": self.embed_dim,
             "n_heads": self.n_heads,
             "n_layers": self.n_layers,
-            "dropout": self.dropout,
+            "n_move_heads": self.n_move_heads,
         }
 
     @classmethod
@@ -25,274 +25,165 @@ class ModelConfig:
         return cls(**d)
 
 
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization (Zhang & Sennrich, 2019)."""
+
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * norm * self.weight
+
+
 class PieceEmbedder(nn.Module):
-    """
-    Embeds chess pieces into a continuous vector space.
-
-    Args:
-        vocab_size (int): Size of the piece vocabulary (number of unique piece types)
-        embedding_dim (int): Dimension of the embedding vectors
-
-    Attributes:
-        embedding (nn.Embedding): Embedding layer that maps piece IDs to vectors
-    """
+    """Embeds chess pieces into a continuous vector space."""
 
     def __init__(self, vocab_size: int, embedding_dim: int) -> None:
         super().__init__()
-
         self.embedding = nn.Embedding(vocab_size, embedding_dim).float()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Embeds a batch of piece IDs into vectors.
-
-        Args:
-            x (torch.Tensor): Tensor of piece IDs
-
-        Returns:
-            torch.Tensor: Tensor of piece embeddings
-        """
         return self.embedding(x)
 
 
 class PositionalEmbedding(nn.Module):
-    """
-    Generates learnable positional embeddings for chess board squares.
-
-    Each of the 64 squares has an independently learned embedding vector.
-
-    Args:
-        embed_dim (int): Dimension of the embedding vectors
-
-    Attributes:
-        embed (nn.Embedding): Embedding layer mapping square index (0-63) to vectors
-        positions (torch.Tensor): Buffer storing indices 0-63 for all squares
-    """
+    """Learnable positional embeddings for 64 board squares."""
 
     def __init__(self, embed_dim: int) -> None:
         super().__init__()
         self.embed = nn.Embedding(64, embed_dim)
-
-        positions = torch.arange(64).unsqueeze(0)  # shape [1, 64]
+        positions = torch.arange(64).unsqueeze(0)  # [1, 64]
         self.register_buffer("positions", positions)
 
     def forward(self, batch_size: int) -> torch.Tensor:
-        """
-        Generate positional embeddings for a batch of boards.
-
-        Args:
-            batch_size (int): Number of boards in the batch
-
-        Returns:
-            torch.Tensor: Positional embeddings with shape [batch_size, 64, embed_dim]
-        """
-        positions = self.positions.expand(batch_size, -1)  # shape [batch, 64]
+        positions = self.positions.expand(batch_size, -1)  # [batch, 64]
         return self.embed(positions)  # [batch, 64, embed_dim]
 
 
 class BoardEmbedder(nn.Module):
-    """
-    Embeds chess board tokens into a learned representation by combining piece and positional embeddings.
-
-    Args:
-        embed_dim (int): Dimension of the embedding vectors
-        n_heads (int): Number of attention heads (unused)
-        n_layers (int): Number of transformer layers (unused)
-
-    Attributes:
-        piece_embedder (PieceEmbedder): Embedding layer for chess pieces and special tokens
-        pos_embedder (PositionalEmbedding): Embedding layer for board positions
-    """
+    """Combines piece and positional embeddings for the 66-token board input."""
 
     def __init__(self, *, embed_dim: int) -> None:
         super().__init__()
-
         VOCAB_SIZE = 16
-
         self.piece_embedder = PieceEmbedder(VOCAB_SIZE, embed_dim)
         self.pos_embedder = PositionalEmbedding(embed_dim)
 
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Generate embeddings for a batch of chess board tokens.
-
-        Args:
-            board_tokens (torch.Tensor): Tensor of shape [batch_size, 65] containing tokenized chess boards
-
-        Returns:
-            torch.Tensor: Combined piece and positional embeddings with shape [batch_size, 65, embed_dim]
-        """
-
         batch_size = board_tokens.size(0)
         x = self.piece_embedder(board_tokens)
-
-        # Only add positional embeddings to the board squares (first 64 tokens)
         pos_emb = self.pos_embedder(batch_size)
         x[:, :64, :] = x[:, :64, :] + pos_emb
-
         return x
 
 
-class AttnFFN(nn.Module):
-    """
-    Feed-forward network used in transformer layers.
+class SwiGLU_FFN(nn.Module):
+    """SwiGLU feed-forward network (Shazeer, 2020).
 
-    Args:
-        embed_dim (int): Input and output dimension
-
-    Attributes:
-        fc1 (nn.Linear): First linear layer
-        fc2 (nn.Linear): Second linear layer
-        activation (nn.LeakyReLU): Activation function
+    Uses three projections with hidden_dim = round_up(8/3 * embed_dim, 64)
+    so that total parameter count matches the standard 4x GELU FFN:
+        Standard:  2 * embed_dim * (4 * embed_dim) = 8 * embed_dim^2
+        SwiGLU:    3 * embed_dim * hidden_dim       ≈ 8 * embed_dim^2
     """
 
-    def __init__(self, embed_dim: int, dropout: float = 0.1) -> None:
+    def __init__(self, embed_dim: int) -> None:
         super().__init__()
+        hidden = int(embed_dim * 8 / 3)
+        hidden = ((hidden + 63) // 64) * 64  # round to 64 for hardware efficiency
 
-        hidden_size = int(embed_dim * 4)
-
-        self.fc1 = nn.Linear(embed_dim, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, embed_dim)
-        self.activation = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
+        self.w1 = nn.Linear(embed_dim, hidden, bias=False)
+        self.w2 = nn.Linear(hidden, embed_dim, bias=False)
+        self.w3 = nn.Linear(embed_dim, hidden, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Applies feed-forward transformation to input.
-
-        Args:
-            x (torch.Tensor): Input tensor
-
-        Returns:
-            torch.Tensor: Transformed tensor
-        """
-        x = self.activation(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
-
-        return x
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 
 class TransformerLayer(nn.Module):
-    """
-    Single transformer layer with multi-head attention and feed-forward network.
+    """Pre-norm transformer layer with multi-head attention and SwiGLU FFN."""
 
-    Args:
-        embed_dim (int): Dimension of input/output embeddings
-        n_heads (int): Number of attention heads
-        dropout (float): Dropout probability
-
-    Attributes:
-        attn (nn.MultiheadAttention): Multi-head attention layer
-        ffn (AttnFFN): Feed-forward network
-        norm1 (nn.LayerNorm): Layer normalization before attention
-        norm2 (nn.LayerNorm): Layer normalization before feed-forward
-        dropout (nn.Dropout): Dropout layer
-        embed_dim (int): Embedding dimension
-    """
-
-    def __init__(self, embed_dim: int, n_heads: int, dropout: float = 0.1) -> None:
+    def __init__(self, embed_dim: int, n_heads: int) -> None:
         super().__init__()
-
-        self.attn = nn.MultiheadAttention(
-            embed_dim, n_heads, batch_first=True, dropout=dropout
-        )
-        self.ffn = AttnFFN(embed_dim, dropout=dropout)
-
-        # Separate LayerNorms for attention and FFN (pre-norm)
-        self.norm1 = nn.LayerNorm(embed_dim)
-        self.norm2 = nn.LayerNorm(embed_dim)
-
-        # Add dropout layers
-        self.dropout = nn.Dropout(dropout)
-
+        self.attn = nn.MultiheadAttention(embed_dim, n_heads, batch_first=True)
+        self.ffn = SwiGLU_FFN(embed_dim)
+        self.norm1 = RMSNorm(embed_dim)
+        self.norm2 = RMSNorm(embed_dim)
         self.embed_dim = embed_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Applies transformer layer to input.
-
-        Args:
-            x (torch.Tensor): Input tensor
-
-        Returns:
-            torch.Tensor: Transformed tensor after attention and feed-forward
-        """
-        # Pre-norm before attention
+        # Pre-norm attention
         x_attn = self.norm1(x)
         attd = self.attn(x_attn, x_attn, x_attn, need_weights=False)[0]
-        x = x + self.dropout(attd)  # Residual connection after attention with dropout
+        x = x + attd
 
-        # Pre-norm before FFN
+        # Pre-norm SwiGLU FFN
         x_ffn = self.norm2(x)
         ffn_out = self.ffn(x_ffn)
-        x = x + self.dropout(ffn_out)  # Residual connection after FFN with dropout
+        x = x + ffn_out
 
         return x
 
 
+# ---------------------------------------------------------------------------
+# Move prediction head (unchanged from v3)
+# ---------------------------------------------------------------------------
+
+
 class MovePredictor(nn.Module):
-    """
-    Feed-forward network that predicts `P(from_square = i, to_square = j) = P(from_square = i) * P(to_square = j | from_square = i)`
-    """
+    """Factored move prediction: from-head MLP + multi-head bilinear to-head."""
 
-    def __init__(self, embed_dim: int, hidden_dim: int | None = None) -> None:
+    def __init__(self, embed_dim: int, n_move_heads: int = 8) -> None:
         super().__init__()
-        if hidden_dim is None:
-            hidden_dim = embed_dim
+        assert (
+            embed_dim % n_move_heads == 0
+        ), f"embed_dim ({embed_dim}) must be divisible by n_move_heads ({n_move_heads})"
+        self.n_heads = n_move_heads
+        self.head_dim = embed_dim // n_move_heads
+        self.scale = self.head_dim**-0.5
 
-        # predicts P(from_square = i)
+        # From-square head (per-square MLP with CLS context)
         self.from_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, hidden_dim),
+            nn.Linear(embed_dim * 2, embed_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(embed_dim, 1),
         )
 
-        # predicts P(to_square = j | from_square = i)
-        self.to_head = nn.Sequential(
-            nn.Linear(embed_dim * 2, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 64),
-        )
+        # To-square head (multi-head bilinear Q·K scoring)
+        self.query_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.key_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
     def forward(
         self, x: torch.Tensor, cls: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Predicts move scores for pieces.
+        batch_size, seq_len, _ = x.shape
 
-        Args:
-            x (torch.Tensor): Piece embeddings of shape [batch_size, 64, embed_dim]
-            cls (torch.Tensor): Class token of shape [batch_size, embed_dim]
+        # From-square scores
+        expanded_cls = cls.unsqueeze(1).expand(-1, seq_len, -1)
+        from_input = torch.cat([x, expanded_cls], dim=-1)  # [batch, 64, 2·D]
+        from_scores = self.from_head(from_input).squeeze(-1)  # [batch, 64]
 
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]: Tuple containing:
-                - From square scores of shape [batch_size, 64]
-                - To square scores of shape [batch_size, 64, 64]
-        """
-        # Expand cls token to match x's sequence length
-        batch_size = x.size(0)
-        expanded_cls = cls.unsqueeze(1).expand(-1, 64, -1)
+        # To-square scores via multi-head bilinear attention
+        Q = self.query_proj(x)  # [batch, 64, D]
+        K = self.key_proj(x)  # [batch, 64, D]
 
-        # Concatenate expanded cls token with x
-        x = torch.cat([x, expanded_cls], dim=-1)
+        Q = Q.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
 
-        # Get from and to scores
-        from_scores = self.from_head(x).squeeze(-1)  # [batch_size, 64]
-        to_scores = self.to_head(x)  # [batch_size, 64, 64]
+        to_scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
+        to_scores = to_scores.sum(dim=1)  # [batch, 64, 64]
 
         return from_scores, to_scores
 
 
 class Chet(nn.Module):
-    """
-    Complete transformer model for chess move prediction.
+    """Complete transformer model for chess move prediction (v3b).
 
-    Args:
-        embed_dim (int): Embedding dimension
-        n_heads (int): Number of attention heads
-        n_layers (int): Number of transformer layers
-        dropout (float): Dropout probability (default: 0.1)
+    Architecture identical to v3 except:
+      - SwiGLU FFN (matched param count)
+      - RMSNorm everywhere
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -301,53 +192,34 @@ class Chet(nn.Module):
         embed_dim = config.embed_dim
         n_heads = config.n_heads
         n_layers = config.n_layers
-        dropout = config.dropout
+        n_move_heads = config.n_move_heads
 
         self.board_embedder = BoardEmbedder(embed_dim=embed_dim)
-
-        self.embed_dropout = nn.Dropout(dropout)
-
         self.transformer_layers = nn.ModuleList(
-            [TransformerLayer(embed_dim, n_heads, dropout) for _ in range(n_layers)]
+            [TransformerLayer(embed_dim, n_heads) for _ in range(n_layers)]
         )
-
-        self.move_predictor = MovePredictor(embed_dim)
-        self.norm = nn.LayerNorm(embed_dim)
+        self.move_predictor = MovePredictor(embed_dim, n_move_heads=n_move_heads)
+        self.norm = RMSNorm(embed_dim)
 
     def forward(self, board_tokens: torch.Tensor) -> torch.Tensor:
-        """
-        Predicts move probabilities for each piece on the board.
-
-        Args:
-            board_tokens (torch.Tensor): Tokenized board of shape [batch_size, 65]
-            legal_moves_mask (torch.Tensor): Mask of shape [batch_size, 4096] (optional)
-            where the move `i = 64 * from_square + to_square` is legal if
-            `legal_moves_mask[b, i] = 1`
-
-        Returns:
-            torch.Tensor: Move logits of shape [batch_size, 4096] where the `64i + j`th index
-            along the last dimension is the logit of the move from `i` to `j`
-        """
         batch_size = board_tokens.size(0)
 
-        # 1) Embed the board and apply dropout
-        x = self.board_embedder(board_tokens)  # [batch_size, 66, embed_dim]
-        x = self.embed_dropout(x)
+        # 1) Embed the board
+        x = self.board_embedder(board_tokens)  # [batch, 66, embed_dim]
 
-        # 2) Pass through transformer layers
+        # 2) Transformer layers
         for layer in self.transformer_layers:
             x = layer(x)
 
         # 3) Final normalization
         x = self.norm(x)
 
-        # 4) Separate the CLS token and the 64 squares
-        cls_embedding = x[:, 65, :]  # [batch_size, embed_dim]
-        piece_embeddings = x[:, 0:64, :]  # [batch_size, 64, embed_dim]
+        # 4) Separate CLS token and 64 squares
+        cls_embedding = x[:, 65, :]  # [batch, embed_dim]
+        piece_embeddings = x[:, 0:64, :]  # [batch, 64, embed_dim]
 
-        # p(from_square = i), p(to_square = j | from_square = i)
+        # 5) Predict moves
         from_logits, to_logits = self.move_predictor(piece_embeddings, cls_embedding)
-
         full_logits = from_logits.unsqueeze(-1) + to_logits
         full_logits = full_logits.view(batch_size, 64 * 64)
 
@@ -359,30 +231,16 @@ class Chet(nn.Module):
         board: chess.Board,
         n: int = 5,
         *,
-        temperature: float = 1.0
+        temperature: float = 1.0,
     ) -> list[tuple[chess.Move, float]]:
-        """
-        Get the top n legal moves predicted by the model for a given board position.
-
-        Args:
-            board_tokens (torch.Tensor): Tokenized board of shape [1, 65]
-            board (chess.Board): The chess board state to get moves for
-            n (int): Number of top moves to return. Defaults to 5.
-
-        Returns:
-            list[tuple[chess.Move, float]]: List of (move, probability) tuples for the top n legal moves
-        """
         with torch.no_grad():
             move_logits = self(board_tokens)  # [1, 4096]
-            move_probs = F.softmax(move_logits / temperature, dim=-1)[0]  # [4096]
+            move_probs = F.softmax(move_logits / temperature, dim=-1)[0]
 
         moves_with_probs: list[tuple[chess.Move, float]] = []
-
         for move in board.legal_moves:
-            # always promote to queen
             if move.promotion:
                 move.promotion = chess.QUEEN
-
             from_square = move.from_square
             to_square = move.to_square
             idx = 64 * from_square + to_square
@@ -393,23 +251,10 @@ class Chet(nn.Module):
         return moves_with_probs[:n]
 
     def get_n_params(self):
-        """
-        Get the number of trainable parameters in the model.
-        """
-
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     @classmethod
     def from_pretrained(cls, path: str, config: ModelConfig, *, device: str = "cpu"):
-        """
-        Load a pretrained model from a file.
-
-        Args:
-            path (str): The path to the model file
-            config (ModelConfig): The configuration used to train the model
-            device (str): The device to load the model onto
-        """
-
         model = cls(config)
         model.load_state_dict(torch.load(path, map_location=device))
         model.eval()
